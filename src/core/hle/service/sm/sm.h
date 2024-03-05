@@ -1,66 +1,108 @@
-// Copyright 2018 yuzu emulator team
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
+#include <chrono>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
-#include "core/hle/kernel/kernel.h"
+
+#include "common/concepts.h"
+#include "core/hle/kernel/k_port.h"
+#include "core/hle/kernel/svc.h"
 #include "core/hle/result.h"
 #include "core/hle/service/service.h"
 
+namespace Core {
+class System;
+}
+
 namespace Kernel {
-class ClientPort;
-class ClientSession;
-class ServerPort;
+class KClientPort;
+class KClientSession;
+class KernelCore;
+class KPort;
 class SessionRequestHandler;
 } // namespace Kernel
 
-namespace Service {
-namespace SM {
+namespace Service::SM {
+
+class Controller;
 
 /// Interface to "sm:" service
 class SM final : public ServiceFramework<SM> {
 public:
-    SM(std::shared_ptr<ServiceManager> service_manager);
-    ~SM() = default;
+    explicit SM(ServiceManager& service_manager_, Core::System& system_);
+    ~SM() override;
 
 private:
-    void Initialize(Kernel::HLERequestContext& ctx);
-    void GetService(Kernel::HLERequestContext& ctx);
+    void Initialize(HLERequestContext& ctx);
+    void GetServiceCmif(HLERequestContext& ctx);
+    void GetServiceTipc(HLERequestContext& ctx);
+    void RegisterServiceCmif(HLERequestContext& ctx);
+    void RegisterServiceTipc(HLERequestContext& ctx);
+    void UnregisterService(HLERequestContext& ctx);
 
-    std::shared_ptr<ServiceManager> service_manager;
+    Result GetServiceImpl(Kernel::KClientSession** out_client_session, HLERequestContext& ctx);
+    void RegisterServiceImpl(HLERequestContext& ctx, std::string name, u32 max_session_count,
+                             bool is_light);
+
+    ServiceManager& service_manager;
+    Kernel::KernelCore& kernel;
 };
-
-class Controller;
-
-constexpr ResultCode ERR_SERVICE_NOT_REGISTERED(-1);
-constexpr ResultCode ERR_MAX_CONNECTIONS_REACHED(-1);
-constexpr ResultCode ERR_INVALID_NAME_SIZE(-1);
-constexpr ResultCode ERR_NAME_CONTAINS_NUL(-1);
-constexpr ResultCode ERR_ALREADY_REGISTERED(-1);
 
 class ServiceManager {
 public:
-    static void InstallInterfaces(std::shared_ptr<ServiceManager> self);
+    explicit ServiceManager(Kernel::KernelCore& kernel_);
+    ~ServiceManager();
 
-    ResultVal<Kernel::SharedPtr<Kernel::ServerPort>> RegisterService(std::string name,
-                                                                     unsigned int max_sessions);
-    ResultVal<Kernel::SharedPtr<Kernel::ClientPort>> GetServicePort(const std::string& name);
-    ResultVal<Kernel::SharedPtr<Kernel::ClientSession>> ConnectToService(const std::string& name);
+    Result RegisterService(Kernel::KServerPort** out_server_port, std::string name,
+                           u32 max_sessions, SessionRequestHandlerFactory handler_factory);
+    Result UnregisterService(const std::string& name);
+    Result GetServicePort(Kernel::KClientPort** out_client_port, const std::string& name);
 
-    void InvokeControlRequest(Kernel::HLERequestContext& context);
+    template <Common::DerivedFrom<SessionRequestHandler> T>
+    std::shared_ptr<T> GetService(const std::string& service_name, bool block = false) const {
+        auto service = registered_services.find(service_name);
+        if (service == registered_services.end() && !block) {
+            LOG_DEBUG(Service, "Can't find service: {}", service_name);
+            return nullptr;
+        } else if (block) {
+            using namespace std::literals::chrono_literals;
+            while (service == registered_services.end()) {
+                Kernel::Svc::SleepThread(
+                    kernel.System(),
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(100ms).count());
+                service = registered_services.find(service_name);
+            }
+        }
+
+        return std::static_pointer_cast<T>(service->second());
+    }
+
+    void InvokeControlRequest(HLERequestContext& context);
+
+    void SetDeferralEvent(Kernel::KEvent* deferral_event_) {
+        deferral_event = deferral_event_;
+    }
 
 private:
-    std::weak_ptr<SM> sm_interface;
+    std::shared_ptr<SM> sm_interface;
     std::unique_ptr<Controller> controller_interface;
 
-    /// Map of registered services, retrieved using GetServicePort or ConnectToService.
-    std::unordered_map<std::string, Kernel::SharedPtr<Kernel::ClientPort>> registered_services;
+    /// Map of registered services, retrieved using GetServicePort.
+    std::mutex lock;
+    std::unordered_map<std::string, SessionRequestHandlerFactory> registered_services;
+    std::unordered_map<std::string, Kernel::KClientPort*> service_ports;
+
+    /// Kernel context
+    Kernel::KernelCore& kernel;
+    Kernel::KEvent* deferral_event{};
 };
 
-extern std::shared_ptr<ServiceManager> g_service_manager;
+/// Runs SM services.
+void LoopProcess(Core::System& system);
 
-} // namespace SM
-} // namespace Service
+} // namespace Service::SM

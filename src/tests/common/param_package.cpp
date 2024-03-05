@@ -1,16 +1,19 @@
-// Copyright 2017 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2017 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <catch.hpp>
+#include <catch2/catch_test_macros.hpp>
 #include <math.h>
+#include "common/logging/backend.h"
 #include "common/param_package.h"
 
 namespace Common {
 
 TEST_CASE("ParamPackage", "[common]") {
+    Common::Log::DisableLoggingInTests();
     ParamPackage original{
-        {"abc", "xyz"}, {"def", "42"}, {"jkl", "$$:1:$2$,3"},
+        {"abc", "xyz"},
+        {"def", "42"},
+        {"jkl", "$$:1:$2$,3"},
     };
     original.Set("ghi", 3.14f);
     ParamPackage copy(original.Serialize());

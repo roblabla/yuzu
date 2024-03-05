@@ -1,34 +1,27 @@
-// Copyright 2014 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2014 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
-#include <atomic>
 #include <memory>
 
-class EmuWindow;
-class RendererBase;
+namespace Core {
+class System;
+}
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// Video Core namespace
+namespace Core::Frontend {
+class EmuWindow;
+}
+
+namespace Tegra {
+class GPU;
+}
 
 namespace VideoCore {
 
-extern std::unique_ptr<RendererBase> g_renderer; ///< Renderer plugin
-extern EmuWindow* g_emu_window;                  ///< Emu window
+class RendererBase;
 
-// TODO: Wrap these in a user settings struct along with any other graphics settings (often set from
-// qt ui)
-extern std::atomic<bool> g_toggle_framelimit_enabled;
+/// Creates an emulated GPU instance using the given system context.
+std::unique_ptr<Tegra::GPU> CreateGPU(Core::Frontend::EmuWindow& emu_window, Core::System& system);
 
-/// Start the video core
-void Start();
-
-/// Initialize the video core
-bool Init(EmuWindow* emu_window);
-
-/// Shutdown the video core
-void Shutdown();
-
-} // namespace
+} // namespace VideoCore

@@ -1,83 +1,108 @@
-// Copyright 2014 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2014 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
+#include <atomic>
+#include <functional>
 #include <memory>
-#include "common/assert.h"
+
+#include "common/common_funcs.h"
 #include "common/common_types.h"
+#include "core/frontend/framebuffer_layout.h"
+#include "video_core/gpu.h"
+#include "video_core/rasterizer_interface.h"
 
+namespace Core::Frontend {
 class EmuWindow;
+class GraphicsContext;
+} // namespace Core::Frontend
 
-class RendererBase : NonCopyable {
+namespace VideoCore {
+
+struct RendererSettings {
+    // Screenshot
+    std::atomic<bool> screenshot_requested{false};
+    void* screenshot_bits{};
+    std::function<void(bool)> screenshot_complete_callback;
+    Layout::FramebufferLayout screenshot_framebuffer_layout;
+};
+
+class RendererBase {
 public:
-    /// Used to reference a framebuffer
-    enum kFramebuffer { kFramebuffer_VirtualXFB = 0, kFramebuffer_EFB, kFramebuffer_Texture };
+    YUZU_NON_COPYABLE(RendererBase);
+    YUZU_NON_MOVEABLE(RendererBase);
 
-    /**
-     * Struct describing framebuffer metadata
-     * TODO(bunnei): This struct belongs in the GPU code, but we don't have a good place for it yet.
-     */
-    struct FramebufferInfo {
-        enum class PixelFormat : u32 {
-            ABGR8 = 1,
-        };
+    explicit RendererBase(Core::Frontend::EmuWindow& window,
+                          std::unique_ptr<Core::Frontend::GraphicsContext> context);
+    virtual ~RendererBase();
 
-        /**
-         * Returns the number of bytes per pixel.
-         */
-        static u32 BytesPerPixel(PixelFormat format) {
-            switch (format) {
-            case PixelFormat::ABGR8:
-                return 4;
-            }
+    /// Finalize rendering the guest frame and draw into the presentation texture
+    virtual void Composite(std::span<const Tegra::FramebufferConfig> layers) = 0;
 
-            UNREACHABLE();
-        }
+    /// Get the tiled applet layer capture buffer
+    virtual std::vector<u8> GetAppletCaptureBuffer() = 0;
 
-        VAddr address;
-        u32 offset;
-        u32 width;
-        u32 height;
-        u32 stride;
-        PixelFormat pixel_format;
-    };
+    [[nodiscard]] virtual RasterizerInterface* ReadRasterizer() = 0;
 
-    virtual ~RendererBase() {}
-
-    /// Swap buffers (render frame)
-    virtual void SwapBuffers(const FramebufferInfo& framebuffer_info) = 0;
-
-    /**
-     * Set the emulator window to use for renderer
-     * @param window EmuWindow handle to emulator window to use for rendering
-     */
-    virtual void SetWindow(EmuWindow* window) = 0;
-
-    /// Initialize the renderer
-    virtual bool Init() = 0;
-
-    /// Shutdown the renderer
-    virtual void ShutDown() = 0;
+    [[nodiscard]] virtual std::string GetDeviceVendor() const = 0;
 
     // Getter/setter functions:
     // ------------------------
 
-    f32 GetCurrentFPS() const {
+    [[nodiscard]] f32 GetCurrentFPS() const {
         return m_current_fps;
     }
 
-    int GetCurrentFrame() const {
+    [[nodiscard]] int GetCurrentFrame() const {
         return m_current_frame;
     }
 
-    void RefreshRasterizerSetting();
+    [[nodiscard]] Core::Frontend::GraphicsContext& Context() {
+        return *context;
+    }
+
+    [[nodiscard]] const Core::Frontend::GraphicsContext& Context() const {
+        return *context;
+    }
+
+    [[nodiscard]] Core::Frontend::EmuWindow& GetRenderWindow() {
+        return render_window;
+    }
+
+    [[nodiscard]] const Core::Frontend::EmuWindow& GetRenderWindow() const {
+        return render_window;
+    }
+
+    [[nodiscard]] RendererSettings& Settings() {
+        return renderer_settings;
+    }
+
+    [[nodiscard]] const RendererSettings& Settings() const {
+        return renderer_settings;
+    }
+
+    /// Refreshes the settings common to all renderers
+    void RefreshBaseSettings();
+
+    /// Returns true if a screenshot is being processed
+    bool IsScreenshotPending() const;
+
+    /// Request a screenshot of the next frame
+    void RequestScreenshot(void* data, std::function<void(bool)> callback,
+                           const Layout::FramebufferLayout& layout);
 
 protected:
+    Core::Frontend::EmuWindow& render_window; ///< Reference to the render window handle.
+    std::unique_ptr<Core::Frontend::GraphicsContext> context;
     f32 m_current_fps = 0.0f; ///< Current framerate, should be set by the renderer
     int m_current_frame = 0;  ///< Current frame, should be set by the renderer
 
+    RendererSettings renderer_settings;
+
 private:
-    bool opengl_rasterizer_active = false;
+    /// Updates the framebuffer layout of the contained render window handle.
+    void UpdateCurrentFramebufferLayout();
 };
+
+} // namespace VideoCore

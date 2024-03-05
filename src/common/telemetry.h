@@ -1,6 +1,5 @@
-// Copyright 2017 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2017 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
@@ -8,14 +7,15 @@
 #include <map>
 #include <memory>
 #include <string>
+#include "common/common_funcs.h"
 #include "common/common_types.h"
 
-namespace Telemetry {
+namespace Common::Telemetry {
 
 /// Field type, used for grouping fields together in the final submitted telemetry log
 enum class FieldType : u8 {
     None = 0,     ///< No specified field group
-    App,          ///< Citra application fields (e.g. version, branch, etc.)
+    App,          ///< yuzu application fields (e.g. version, branch, etc.)
     Session,      ///< Emulated session fields (e.g. title ID, log, etc.)
     Performance,  ///< Emulated performance (e.g. fps, emulated CPU speed, etc.)
     UserFeedback, ///< User submitted feedback (e.g. star rating, user notes, etc.)
@@ -28,7 +28,7 @@ struct VisitorInterface;
 /**
  * Interface class for telemetry data fields.
  */
-class FieldInterface : NonCopyable {
+class FieldInterface {
 public:
     virtual ~FieldInterface() = default;
 
@@ -52,54 +52,42 @@ public:
 template <typename T>
 class Field : public FieldInterface {
 public:
-    Field(FieldType type, std::string name, const T& value)
-        : type(type), name(std::move(name)), value(value) {}
+    YUZU_NON_COPYABLE(Field);
 
-    Field(FieldType type, std::string name, T&& value)
-        : type(type), name(std::move(name)), value(std::move(value)) {}
+    Field(FieldType type_, std::string_view name_, T value_)
+        : name(name_), type(type_), value(std::move(value_)) {}
 
-    Field(const Field& other) : Field(other.type, other.name, other.value) {}
+    ~Field() override = default;
 
-    Field& operator=(const Field& other) {
-        type = other.type;
-        name = other.name;
-        value = other.value;
-        return *this;
-    }
-
-    Field& operator=(Field&& other) {
-        type = other.type;
-        name = std::move(other.name);
-        value = std::move(other.value);
-        return *this;
-    }
+    Field(Field&&) noexcept = default;
+    Field& operator=(Field&& other) noexcept = default;
 
     void Accept(VisitorInterface& visitor) const override;
 
-    const std::string& GetName() const override {
+    [[nodiscard]] const std::string& GetName() const override {
         return name;
     }
 
     /**
      * Returns the type of the field.
      */
-    FieldType GetType() const {
+    [[nodiscard]] FieldType GetType() const {
         return type;
     }
 
     /**
      * Returns the value of the field.
      */
-    const T& GetValue() const {
+    [[nodiscard]] const T& GetValue() const {
         return value;
     }
 
-    inline bool operator==(const Field<T>& other) {
+    [[nodiscard]] bool operator==(const Field& other) const {
         return (type == other.type) && (name == other.name) && (value == other.value);
     }
 
-    inline bool operator!=(const Field<T>& other) {
-        return !(*this == other);
+    [[nodiscard]] bool operator!=(const Field& other) const {
+        return !operator==(other);
     }
 
 private:
@@ -111,9 +99,15 @@ private:
 /**
  * Collection of data fields that have been logged.
  */
-class FieldCollection final : NonCopyable {
+class FieldCollection final {
 public:
+    YUZU_NON_COPYABLE(FieldCollection);
+
     FieldCollection() = default;
+    ~FieldCollection() = default;
+
+    FieldCollection(FieldCollection&&) noexcept = default;
+    FieldCollection& operator=(FieldCollection&&) noexcept = default;
 
     /**
      * Accept method for the visitor pattern, visits each field in the collection.
@@ -128,7 +122,7 @@ public:
      * @param value Value for the field to add.
      */
     template <typename T>
-    void AddField(FieldType type, const char* name, T value) {
+    void AddField(FieldType type, std::string_view name, T value) {
         return AddField(std::make_unique<Field<T>>(type, name, std::move(value)));
     }
 
@@ -146,7 +140,7 @@ private:
  * Telemetry fields visitor interface class. A backend to log to a web service should implement
  * this interface.
  */
-struct VisitorInterface : NonCopyable {
+struct VisitorInterface {
     virtual ~VisitorInterface() = default;
 
     virtual void Visit(const Field<bool>& field) = 0;
@@ -166,14 +160,18 @@ struct VisitorInterface : NonCopyable {
 
     /// Completion method, called once all fields have been visited
     virtual void Complete() = 0;
+    virtual bool SubmitTestcase() = 0;
 };
 
 /**
  * Empty implementation of VisitorInterface that drops all fields. Used when a functional
  * backend implementation is not available.
  */
-struct NullVisitor : public VisitorInterface {
-    ~NullVisitor() = default;
+struct NullVisitor final : public VisitorInterface {
+    YUZU_NON_COPYABLE(NullVisitor);
+
+    NullVisitor() = default;
+    ~NullVisitor() override = default;
 
     void Visit(const Field<bool>& /*field*/) override {}
     void Visit(const Field<double>& /*field*/) override {}
@@ -191,6 +189,21 @@ struct NullVisitor : public VisitorInterface {
     void Visit(const Field<std::chrono::microseconds>& /*field*/) override {}
 
     void Complete() override {}
+    bool SubmitTestcase() override {
+        return false;
+    }
 };
 
-} // namespace Telemetry
+/// Appends build-specific information to the given FieldCollection,
+/// such as branch name, revision hash, etc.
+void AppendBuildInfo(FieldCollection& fc);
+
+/// Appends CPU-specific information to the given FieldCollection,
+/// such as instruction set extensions, etc.
+void AppendCPUInfo(FieldCollection& fc);
+
+/// Appends OS-specific information to the given FieldCollection,
+/// such as platform name, etc.
+void AppendOSInfo(FieldCollection& fc);
+
+} // namespace Common::Telemetry

@@ -1,12 +1,22 @@
-// Copyright 2017 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2017 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
-#include <future>
-#include <memory>
+#include <string>
 #include "common/telemetry.h"
+
+namespace FileSys {
+class ContentProvider;
+}
+
+namespace Loader {
+class AppLoader;
+}
+
+namespace Service::FileSystem {
+class FileSystemController;
+}
 
 namespace Core {
 
@@ -15,10 +25,36 @@ namespace Core {
  * session, logging any one-time fields. Interfaces with the telemetry backend used for submitting
  * data to the web service. Submits session data on close.
  */
-class TelemetrySession : NonCopyable {
+class TelemetrySession {
 public:
-    TelemetrySession();
+    explicit TelemetrySession();
     ~TelemetrySession();
+
+    TelemetrySession(const TelemetrySession&) = delete;
+    TelemetrySession& operator=(const TelemetrySession&) = delete;
+
+    TelemetrySession(TelemetrySession&&) = delete;
+    TelemetrySession& operator=(TelemetrySession&&) = delete;
+
+    /**
+     * Adds the initial telemetry info necessary when starting up a title.
+     *
+     * This includes information such as:
+     *   - Telemetry ID
+     *   - Initialization time
+     *   - Title ID
+     *   - Title name
+     *   - Title file format
+     *   - Miscellaneous settings values.
+     *
+     * @param app_loader       The application loader to use to retrieve
+     *                         title-specific information.
+     * @param fsc              Filesystem controller to use to retrieve info.
+     * @param content_provider Content provider to use to retrieve info.
+     */
+    void AddInitialInfo(Loader::AppLoader& app_loader,
+                        const Service::FileSystem::FileSystemController& fsc,
+                        const FileSys::ContentProvider& content_provider);
 
     /**
      * Wrapper around the Telemetry::FieldCollection::AddField method.
@@ -27,13 +63,19 @@ public:
      * @param value Value for the field to add.
      */
     template <typename T>
-    void AddField(Telemetry::FieldType type, const char* name, T value) {
+    void AddField(Common::Telemetry::FieldType type, const char* name, T value) {
         field_collection.AddField(type, name, std::move(value));
     }
 
+    /**
+     * Submits a Testcase.
+     * @returns A bool indicating whether the submission succeeded
+     */
+    bool SubmitTestcase();
+
 private:
-    Telemetry::FieldCollection field_collection; ///< Tracks all added fields for the session
-    std::unique_ptr<Telemetry::VisitorInterface> backend; ///< Backend interface that logs fields
+    /// Tracks all added fields for the session
+    Common::Telemetry::FieldCollection field_collection;
 };
 
 /**
@@ -50,11 +92,10 @@ u64 RegenerateTelemetryId();
 
 /**
  * Verifies the username and token.
- * @param username Citra username to use for authentication.
- * @param token Citra token to use for authentication.
- * @param func A function that gets exectued when the verification is finished
+ * @param username yuzu username to use for authentication.
+ * @param token yuzu token to use for authentication.
  * @returns Future with bool indicating whether the verification succeeded
  */
-std::future<bool> VerifyLogin(std::string username, std::string token, std::function<void()> func);
+bool VerifyLogin(const std::string& username, const std::string& token);
 
 } // namespace Core

@@ -1,184 +1,49 @@
-// Copyright 2018 yuzu emulator team
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <cinttypes>
-#include <memory>
-#include <dynarmic/A64/a64.h>
-#include <dynarmic/A64/config.h>
+#ifdef __linux__
+
+#include "common/signal_chain.h"
+
 #include "core/arm/dynarmic/arm_dynarmic.h"
-#include "core/core_timing.h"
-#include "core/hle/kernel/svc.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/memory.h"
 
-class ARM_Dynarmic_Callbacks : public Dynarmic::A64::UserCallbacks {
-public:
-    explicit ARM_Dynarmic_Callbacks(ARM_Dynarmic& parent) : parent(parent) {}
-    ~ARM_Dynarmic_Callbacks() = default;
+namespace Core {
 
-    u8 MemoryRead8(u64 vaddr) override {
-        return Memory::Read8(vaddr);
-    }
-    u16 MemoryRead16(u64 vaddr) override {
-        return Memory::Read16(vaddr);
-    }
-    u32 MemoryRead32(u64 vaddr) override {
-        return Memory::Read32(vaddr);
-    }
-    u64 MemoryRead64(u64 vaddr) override {
-        return Memory::Read64(vaddr);
+namespace {
+
+thread_local Core::Memory::Memory* g_current_memory{};
+std::once_flag g_registered{};
+struct sigaction g_old_segv {};
+
+void HandleSigSegv(int sig, siginfo_t* info, void* ctx) {
+    if (g_current_memory && g_current_memory->InvalidateSeparateHeap(info->si_addr)) {
+        return;
     }
 
-    void MemoryWrite8(u64 vaddr, u8 value) override {
-        Memory::Write8(vaddr, value);
-    }
-    void MemoryWrite16(u64 vaddr, u16 value) override {
-        Memory::Write16(vaddr, value);
-    }
-    void MemoryWrite32(u64 vaddr, u32 value) override {
-        Memory::Write32(vaddr, value);
-    }
-    void MemoryWrite64(u64 vaddr, u64 value) override {
-        Memory::Write64(vaddr, value);
-    }
-
-    void InterpreterFallback(u64 pc, size_t num_instructions) override {
-        ARM_Interface::ThreadContext ctx;
-        parent.SaveContext(ctx);
-        parent.inner_unicorn.LoadContext(ctx);
-        parent.inner_unicorn.ExecuteInstructions(num_instructions);
-        parent.inner_unicorn.SaveContext(ctx);
-        parent.LoadContext(ctx);
-        num_interpreted_instructions += num_instructions;
-    }
-
-    void ExceptionRaised(u64 pc, Dynarmic::A64::Exception /*exception*/) override {
-        ASSERT_MSG(false, "ExceptionRaised(%" PRIx64 ")", pc);
-    }
-
-    void CallSVC(u32 swi) override {
-        printf("svc %x\n", swi);
-        Kernel::CallSVC(swi);
-    }
-
-    void AddTicks(u64 ticks) override {
-        if (ticks > ticks_remaining) {
-            ticks_remaining = 0;
-            return;
-        }
-        ticks -= ticks_remaining;
-    }
-    u64 GetTicksRemaining() override {
-        return ticks_remaining;
-    }
-
-    ARM_Dynarmic& parent;
-    size_t ticks_remaining = 0;
-    size_t num_interpreted_instructions = 0;
-    u64 tpidrr0_el0 = 0;
-};
-
-ARM_Dynarmic::ARM_Dynarmic()
-    : cb(std::make_unique<ARM_Dynarmic_Callbacks>(*this)),
-      jit(Dynarmic::A64::UserConfig{cb.get()}) {
-    ARM_Interface::ThreadContext ctx;
-    inner_unicorn.SaveContext(ctx);
-    LoadContext(ctx);
+    return g_old_segv.sa_sigaction(sig, info, ctx);
 }
 
-ARM_Dynarmic::~ARM_Dynarmic() = default;
+} // namespace
 
-void ARM_Dynarmic::MapBackingMemory(u64 address, size_t size, u8* memory,
-                                    Kernel::VMAPermission perms) {
-    inner_unicorn.MapBackingMemory(address, size, memory, perms);
+ScopedJitExecution::ScopedJitExecution(Kernel::KProcess* process) {
+    g_current_memory = std::addressof(process->GetMemory());
 }
 
-void ARM_Dynarmic::SetPC(u64 pc) {
-    jit.SetPC(pc);
+ScopedJitExecution::~ScopedJitExecution() {
+    g_current_memory = nullptr;
 }
 
-u64 ARM_Dynarmic::GetPC() const {
-    return jit.GetPC();
+void ScopedJitExecution::RegisterHandler() {
+    std::call_once(g_registered, [] {
+        struct sigaction sa {};
+        sa.sa_sigaction = &HandleSigSegv;
+        sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+        Common::SigAction(SIGSEGV, std::addressof(sa), std::addressof(g_old_segv));
+    });
 }
 
-u64 ARM_Dynarmic::GetReg(int index) const {
-    return jit.GetRegister(index);
-}
+} // namespace Core
 
-void ARM_Dynarmic::SetReg(int index, u64 value) {
-    jit.SetRegister(index, value);
-}
-
-u128 ARM_Dynarmic::GetExtReg(int index) const {
-    return jit.GetVector(index);
-}
-
-void ARM_Dynarmic::SetExtReg(int index, u128 value) {
-    jit.SetVector(index, value);
-}
-
-u32 ARM_Dynarmic::GetVFPReg(int /*index*/) const {
-    UNIMPLEMENTED();
-    return {};
-}
-
-void ARM_Dynarmic::SetVFPReg(int /*index*/, u32 /*value*/) {
-    UNIMPLEMENTED();
-}
-
-u32 ARM_Dynarmic::GetCPSR() const {
-    return jit.GetPstate();
-}
-
-void ARM_Dynarmic::SetCPSR(u32 cpsr) {
-    jit.SetPstate(cpsr);
-}
-
-u64 ARM_Dynarmic::GetTlsAddress() const {
-    return cb->tpidrr0_el0;
-}
-
-void ARM_Dynarmic::SetTlsAddress(u64 address) {
-    cb->tpidrr0_el0 = address;
-}
-
-void ARM_Dynarmic::ExecuteInstructions(int num_instructions) {
-    cb->ticks_remaining = num_instructions;
-    jit.Run();
-    CoreTiming::AddTicks(num_instructions - cb->num_interpreted_instructions);
-    cb->num_interpreted_instructions = 0;
-}
-
-void ARM_Dynarmic::SaveContext(ARM_Interface::ThreadContext& ctx) {
-    ctx.cpu_registers = jit.GetRegisters();
-    ctx.sp = jit.GetSP();
-    ctx.pc = jit.GetPC();
-    ctx.cpsr = jit.GetPstate();
-    ctx.fpu_registers = jit.GetVectors();
-    ctx.fpscr = jit.GetFpcr();
-    ctx.tls_address = cb->tpidrr0_el0;
-}
-
-void ARM_Dynarmic::LoadContext(const ARM_Interface::ThreadContext& ctx) {
-    jit.SetRegisters(ctx.cpu_registers);
-    jit.SetSP(ctx.sp);
-    jit.SetPC(ctx.pc);
-    jit.SetPstate(ctx.cpsr);
-    jit.SetVectors(ctx.fpu_registers);
-    jit.SetFpcr(ctx.fpscr);
-    cb->tpidrr0_el0 = ctx.tls_address;
-}
-
-void ARM_Dynarmic::PrepareReschedule() {
-    if (jit.IsExecuting()) {
-        jit.HaltExecution();
-    }
-}
-
-void ARM_Dynarmic::ClearInstructionCache() {
-    jit.ClearCache();
-}
-
-void ARM_Dynarmic::PageTableChanged() {
-    UNIMPLEMENTED();
-}
+#endif

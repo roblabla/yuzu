@@ -1,16 +1,21 @@
-// Copyright 2018 yuzu emulator team
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "core/hle/service/am/am.h"
-#include "core/hle/service/am/applet_oe.h"
+#include "core/hle/service/am/service/all_system_applet_proxies_service.h"
+#include "core/hle/service/am/service/application_proxy_service.h"
+#include "core/hle/service/server_manager.h"
 
-namespace Service {
-namespace AM {
+namespace Service::AM {
 
-void InstallInterfaces(SM::ServiceManager& service_manager) {
-    std::make_shared<AppletOE>()->InstallAsService(service_manager);
+void LoopProcess(Core::System& system) {
+    auto server_manager = std::make_unique<ServerManager>(system);
+
+    server_manager->RegisterNamedService("appletAE",
+                                         std::make_shared<IAllSystemAppletProxiesService>(system));
+    server_manager->RegisterNamedService("appletOE",
+                                         std::make_shared<IApplicationProxyService>(system));
+    ServerManager::RunServer(std::move(server_manager));
 }
 
-} // namespace AM
-} // namespace Service
+} // namespace Service::AM

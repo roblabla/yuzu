@@ -1,209 +1,353 @@
-// Copyright 2015 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2015 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
+#include <string_view>
 #include <utility>
 #include <glad/glad.h>
-#include "common/common_types.h"
-#include "video_core/renderer_opengl/gl_shader_util.h"
-#include "video_core/renderer_opengl/gl_state.h"
+#include "common/common_funcs.h"
 
-class OGLTexture : private NonCopyable {
+namespace OpenGL {
+
+class OGLRenderbuffer final {
 public:
-    OGLTexture() = default;
-    OGLTexture(OGLTexture&& o) {
-        std::swap(handle, o.handle);
+    YUZU_NON_COPYABLE(OGLRenderbuffer);
+
+    OGLRenderbuffer() = default;
+
+    OGLRenderbuffer(OGLRenderbuffer&& o) noexcept : handle(std::exchange(o.handle, 0)) {}
+
+    ~OGLRenderbuffer() {
+        Release();
     }
+
+    OGLRenderbuffer& operator=(OGLRenderbuffer&& o) noexcept {
+        Release();
+        handle = std::exchange(o.handle, 0);
+        return *this;
+    }
+
+    /// Creates a new internal OpenGL resource and stores the handle
+    void Create();
+
+    /// Deletes the internal OpenGL resource
+    void Release();
+
+    GLuint handle = 0;
+};
+
+class OGLTexture final {
+public:
+    YUZU_NON_COPYABLE(OGLTexture);
+
+    OGLTexture() = default;
+
+    OGLTexture(OGLTexture&& o) noexcept : handle(std::exchange(o.handle, 0)) {}
+
     ~OGLTexture() {
         Release();
     }
-    OGLTexture& operator=(OGLTexture&& o) {
-        std::swap(handle, o.handle);
+
+    OGLTexture& operator=(OGLTexture&& o) noexcept {
+        Release();
+        handle = std::exchange(o.handle, 0);
         return *this;
     }
 
     /// Creates a new internal OpenGL resource and stores the handle
-    void Create() {
-        if (handle != 0)
-            return;
-        glGenTextures(1, &handle);
-    }
+    void Create(GLenum target);
 
     /// Deletes the internal OpenGL resource
-    void Release() {
-        if (handle == 0)
-            return;
-        glDeleteTextures(1, &handle);
-        OpenGLState::ResetTexture(handle);
-        handle = 0;
-    }
+    void Release();
 
     GLuint handle = 0;
 };
 
-class OGLSampler : private NonCopyable {
+class OGLTextureView final {
 public:
-    OGLSampler() = default;
-    OGLSampler(OGLSampler&& o) {
-        std::swap(handle, o.handle);
+    YUZU_NON_COPYABLE(OGLTextureView);
+
+    OGLTextureView() = default;
+
+    OGLTextureView(OGLTextureView&& o) noexcept : handle(std::exchange(o.handle, 0)) {}
+
+    ~OGLTextureView() {
+        Release();
     }
+
+    OGLTextureView& operator=(OGLTextureView&& o) noexcept {
+        Release();
+        handle = std::exchange(o.handle, 0);
+        return *this;
+    }
+
+    /// Creates a new internal OpenGL resource and stores the handle
+    void Create();
+
+    /// Deletes the internal OpenGL resource
+    void Release();
+
+    GLuint handle = 0;
+};
+
+class OGLSampler final {
+public:
+    YUZU_NON_COPYABLE(OGLSampler);
+
+    OGLSampler() = default;
+
+    OGLSampler(OGLSampler&& o) noexcept : handle(std::exchange(o.handle, 0)) {}
+
     ~OGLSampler() {
         Release();
     }
-    OGLSampler& operator=(OGLSampler&& o) {
-        std::swap(handle, o.handle);
+
+    OGLSampler& operator=(OGLSampler&& o) noexcept {
+        Release();
+        handle = std::exchange(o.handle, 0);
         return *this;
     }
 
     /// Creates a new internal OpenGL resource and stores the handle
-    void Create() {
-        if (handle != 0)
-            return;
-        glGenSamplers(1, &handle);
-    }
+    void Create();
 
     /// Deletes the internal OpenGL resource
-    void Release() {
-        if (handle == 0)
-            return;
-        glDeleteSamplers(1, &handle);
-        OpenGLState::ResetSampler(handle);
-        handle = 0;
-    }
+    void Release();
 
     GLuint handle = 0;
 };
 
-class OGLShader : private NonCopyable {
+class OGLShader final {
 public:
+    YUZU_NON_COPYABLE(OGLShader);
+
     OGLShader() = default;
-    OGLShader(OGLShader&& o) {
-        std::swap(handle, o.handle);
-    }
+
+    OGLShader(OGLShader&& o) noexcept : handle(std::exchange(o.handle, 0)) {}
+
     ~OGLShader() {
         Release();
     }
-    OGLShader& operator=(OGLShader&& o) {
-        std::swap(handle, o.handle);
+
+    OGLShader& operator=(OGLShader&& o) noexcept {
+        Release();
+        handle = std::exchange(o.handle, 0);
         return *this;
     }
 
-    /// Creates a new internal OpenGL resource and stores the handle
-    void Create(const char* vert_shader, const char* frag_shader) {
-        if (handle != 0)
-            return;
-        handle = GLShader::LoadProgram(vert_shader, frag_shader);
-    }
-
-    /// Deletes the internal OpenGL resource
-    void Release() {
-        if (handle == 0)
-            return;
-        glDeleteProgram(handle);
-        OpenGLState::ResetProgram(handle);
-        handle = 0;
-    }
+    void Release();
 
     GLuint handle = 0;
 };
 
-class OGLBuffer : private NonCopyable {
+class OGLProgram final {
 public:
-    OGLBuffer() = default;
-    OGLBuffer(OGLBuffer&& o) {
-        std::swap(handle, o.handle);
+    YUZU_NON_COPYABLE(OGLProgram);
+
+    OGLProgram() = default;
+
+    OGLProgram(OGLProgram&& o) noexcept : handle(std::exchange(o.handle, 0)) {}
+
+    ~OGLProgram() {
+        Release();
     }
+
+    OGLProgram& operator=(OGLProgram&& o) noexcept {
+        Release();
+        handle = std::exchange(o.handle, 0);
+        return *this;
+    }
+
+    /// Deletes the internal OpenGL resource
+    void Release();
+
+    GLuint handle = 0;
+};
+
+class OGLAssemblyProgram final {
+public:
+    YUZU_NON_COPYABLE(OGLAssemblyProgram);
+
+    OGLAssemblyProgram() = default;
+
+    OGLAssemblyProgram(OGLAssemblyProgram&& o) noexcept : handle(std::exchange(o.handle, 0)) {}
+
+    ~OGLAssemblyProgram() {
+        Release();
+    }
+
+    OGLAssemblyProgram& operator=(OGLAssemblyProgram&& o) noexcept {
+        Release();
+        handle = std::exchange(o.handle, 0);
+        return *this;
+    }
+
+    /// Deletes the internal OpenGL resource
+    void Release();
+
+    GLuint handle = 0;
+};
+
+class OGLPipeline final {
+public:
+    YUZU_NON_COPYABLE(OGLPipeline);
+
+    OGLPipeline() = default;
+    OGLPipeline(OGLPipeline&& o) noexcept : handle{std::exchange<GLuint>(o.handle, 0)} {}
+
+    ~OGLPipeline() {
+        Release();
+    }
+    OGLPipeline& operator=(OGLPipeline&& o) noexcept {
+        handle = std::exchange<GLuint>(o.handle, 0);
+        return *this;
+    }
+
+    /// Creates a new internal OpenGL resource and stores the handle
+    void Create();
+
+    /// Deletes the internal OpenGL resource
+    void Release();
+
+    GLuint handle = 0;
+};
+
+class OGLBuffer final {
+public:
+    YUZU_NON_COPYABLE(OGLBuffer);
+
+    OGLBuffer() = default;
+
+    OGLBuffer(OGLBuffer&& o) noexcept : handle(std::exchange(o.handle, 0)) {}
+
     ~OGLBuffer() {
         Release();
     }
-    OGLBuffer& operator=(OGLBuffer&& o) {
-        std::swap(handle, o.handle);
+
+    OGLBuffer& operator=(OGLBuffer&& o) noexcept {
+        Release();
+        handle = std::exchange(o.handle, 0);
         return *this;
     }
 
     /// Creates a new internal OpenGL resource and stores the handle
-    void Create() {
-        if (handle != 0)
-            return;
-        glGenBuffers(1, &handle);
-    }
+    void Create();
 
     /// Deletes the internal OpenGL resource
-    void Release() {
-        if (handle == 0)
-            return;
-        glDeleteBuffers(1, &handle);
-        OpenGLState::ResetBuffer(handle);
-        handle = 0;
-    }
+    void Release();
 
     GLuint handle = 0;
 };
 
-class OGLVertexArray : private NonCopyable {
+class OGLSync final {
 public:
-    OGLVertexArray() = default;
-    OGLVertexArray(OGLVertexArray&& o) {
-        std::swap(handle, o.handle);
-    }
-    ~OGLVertexArray() {
+    YUZU_NON_COPYABLE(OGLSync);
+
+    OGLSync() = default;
+
+    OGLSync(OGLSync&& o) noexcept : handle(std::exchange(o.handle, nullptr)) {}
+
+    ~OGLSync() {
         Release();
     }
-    OGLVertexArray& operator=(OGLVertexArray&& o) {
-        std::swap(handle, o.handle);
+    OGLSync& operator=(OGLSync&& o) noexcept {
+        Release();
+        handle = std::exchange(o.handle, nullptr);
         return *this;
     }
 
     /// Creates a new internal OpenGL resource and stores the handle
-    void Create() {
-        if (handle != 0)
-            return;
-        glGenVertexArrays(1, &handle);
-    }
+    void Create();
 
     /// Deletes the internal OpenGL resource
-    void Release() {
-        if (handle == 0)
-            return;
-        glDeleteVertexArrays(1, &handle);
-        OpenGLState::ResetVertexArray(handle);
-        handle = 0;
-    }
+    void Release();
 
-    GLuint handle = 0;
+    /// Checks if the sync has been signaled
+    bool IsSignaled() const noexcept;
+
+    GLsync handle = 0;
 };
 
-class OGLFramebuffer : private NonCopyable {
+class OGLFramebuffer final {
 public:
+    YUZU_NON_COPYABLE(OGLFramebuffer);
+
     OGLFramebuffer() = default;
-    OGLFramebuffer(OGLFramebuffer&& o) {
-        std::swap(handle, o.handle);
-    }
+
+    OGLFramebuffer(OGLFramebuffer&& o) noexcept : handle(std::exchange(o.handle, 0)) {}
+
     ~OGLFramebuffer() {
         Release();
     }
-    OGLFramebuffer& operator=(OGLFramebuffer&& o) {
-        std::swap(handle, o.handle);
+
+    OGLFramebuffer& operator=(OGLFramebuffer&& o) noexcept {
+        Release();
+        handle = std::exchange(o.handle, 0);
         return *this;
     }
 
     /// Creates a new internal OpenGL resource and stores the handle
-    void Create() {
-        if (handle != 0)
-            return;
-        glGenFramebuffers(1, &handle);
-    }
+    void Create();
 
     /// Deletes the internal OpenGL resource
-    void Release() {
-        if (handle == 0)
-            return;
-        glDeleteFramebuffers(1, &handle);
-        OpenGLState::ResetFramebuffer(handle);
-        handle = 0;
-    }
+    void Release();
 
     GLuint handle = 0;
 };
+
+class OGLQuery final {
+public:
+    YUZU_NON_COPYABLE(OGLQuery);
+
+    OGLQuery() = default;
+
+    OGLQuery(OGLQuery&& o) noexcept : handle(std::exchange(o.handle, 0)) {}
+
+    ~OGLQuery() {
+        Release();
+    }
+
+    OGLQuery& operator=(OGLQuery&& o) noexcept {
+        Release();
+        handle = std::exchange(o.handle, 0);
+        return *this;
+    }
+
+    /// Creates a new internal OpenGL resource and stores the handle
+    void Create(GLenum target);
+
+    /// Deletes the internal OpenGL resource
+    void Release();
+
+    GLuint handle = 0;
+};
+
+class OGLTransformFeedback final {
+public:
+    YUZU_NON_COPYABLE(OGLTransformFeedback);
+
+    OGLTransformFeedback() = default;
+
+    OGLTransformFeedback(OGLTransformFeedback&& o) noexcept : handle(std::exchange(o.handle, 0)) {}
+
+    ~OGLTransformFeedback() {
+        Release();
+    }
+
+    OGLTransformFeedback& operator=(OGLTransformFeedback&& o) noexcept {
+        Release();
+        handle = std::exchange(o.handle, 0);
+        return *this;
+    }
+
+    /// Creates a new internal OpenGL resource and stores the handle
+    void Create();
+
+    /// Deletes the internal OpenGL resource
+    void Release();
+
+    GLuint handle = 0;
+};
+
+} // namespace OpenGL

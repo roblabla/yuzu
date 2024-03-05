@@ -1,6 +1,5 @@
-// Copyright 2015 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2015 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
@@ -23,12 +22,3 @@ typedef void* HANDLE;
 #include <microprofile.h>
 
 #define MP_RGB(r, g, b) ((r) << 16 | (g) << 8 | (b) << 0)
-
-// On OS X, some Mach header included by MicroProfile defines these as macros, conflicting with
-// identifiers we use.
-#ifdef PAGE_SIZE
-#undef PAGE_SIZE
-#endif
-#ifdef PAGE_MASK
-#undef PAGE_MASK
-#endif

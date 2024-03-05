@@ -1,28 +1,37 @@
-// Copyright 2016 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2016 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
 #include <memory>
-#include <QWidget>
+#include <QScrollArea>
+
+namespace Core {
+class System;
+}
 
 namespace Ui {
 class ConfigureDebug;
 }
 
-class ConfigureDebug : public QWidget {
+class ConfigureDebug : public QScrollArea {
     Q_OBJECT
 
 public:
-    explicit ConfigureDebug(QWidget* parent = nullptr);
-    ~ConfigureDebug();
+    explicit ConfigureDebug(const Core::System& system_, QWidget* parent = nullptr);
+    ~ConfigureDebug() override;
 
-    void applyConfiguration();
-
-private:
-    void setConfiguration();
+    void ApplyConfiguration();
 
 private:
+    void changeEvent(QEvent* event) override;
+
+    void RetranslateUI();
+    void SetConfiguration();
+
     std::unique_ptr<Ui::ConfigureDebug> ui;
+
+    const Core::System& system;
+
+    bool crash_dump_warning_shown{false};
 };

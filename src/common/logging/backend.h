@@ -1,50 +1,28 @@
-// Copyright 2014 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2014 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
-#include <chrono>
-#include <cstdarg>
-#include <string>
-#include <utility>
-#include "common/logging/log.h"
+#include "common/logging/filter.h"
 
-namespace Log {
+namespace Common::Log {
 
 class Filter;
 
-/**
- * A log entry. Log entries are store in a structured format to permit more varied output
- * formatting on different frontends, as well as facilitating filtering and aggregation.
- */
-struct Entry {
-    std::chrono::microseconds timestamp;
-    Class log_class;
-    Level log_level;
-    std::string location;
-    std::string message;
+/// Initializes the logging system. This should be the first thing called in main.
+void Initialize();
 
-    Entry() = default;
-    Entry(Entry&& o) = default;
+void Start();
 
-    Entry& operator=(Entry&& o) = default;
-};
+/// Explicitly stops the logger thread and flushes the buffers
+void Stop();
+
+void DisableLoggingInTests();
 
 /**
- * Returns the name of the passed log class as a C-string. Subclasses are separated by periods
- * instead of underscores as in the enumeration.
+ * The global filter will prevent any messages from even being processed if they are filtered.
  */
-const char* GetLogClassName(Class log_class);
+void SetGlobalFilter(const Filter& filter);
 
-/**
- * Returns the name of the passed log level as a C-string.
- */
-const char* GetLevelName(Level log_level);
-
-/// Creates a log entry by formatting the given source location, and message.
-Entry CreateEntry(Class log_class, Level log_level, const char* filename, unsigned int line_nr,
-                  const char* function, const char* format, va_list args);
-
-void SetFilter(Filter* filter);
-}
+void SetColorConsoleBackendEnabled(bool enabled);
+} // namespace Common::Log

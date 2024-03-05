@@ -1,16 +1,6 @@
-// Copyright (c) 2012- PPSSPP Project / Dolphin Project.
-
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, version 2.0 or later versions.
-
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License 2.0 for more details.
-
-// A copy of the GPL 2.0 should have been included with the program.
-// If not, see http://www.gnu.org/licenses/
+// SPDX-FileCopyrightText: 2012 PPSSPP Project
+// SPDX-FileCopyrightText: 2012 Dolphin Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
@@ -19,115 +9,58 @@
 
 #if defined(_MSC_VER)
 #include <cstdlib>
-#elif defined(__linux__)
-#include <byteswap.h>
-#elif defined(__Bitrig__) || defined(__DragonFly__) || defined(__FreeBSD__) ||                     \
-    defined(__NetBSD__) || defined(__OpenBSD__)
-#include <sys/endian.h>
 #endif
+#include <bit>
 #include <cstring>
+#include <type_traits>
 #include "common/common_types.h"
-
-// GCC 4.6+
-#if __GNUC__ >= 5 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6)
-
-#if __BYTE_ORDER__ && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) && !defined(COMMON_LITTLE_ENDIAN)
-#define COMMON_LITTLE_ENDIAN 1
-#elif __BYTE_ORDER__ && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__) && !defined(COMMON_BIG_ENDIAN)
-#define COMMON_BIG_ENDIAN 1
-#endif
-
-// LLVM/clang
-#elif __clang__
-
-#if __LITTLE_ENDIAN__ && !defined(COMMON_LITTLE_ENDIAN)
-#define COMMON_LITTLE_ENDIAN 1
-#elif __BIG_ENDIAN__ && !defined(COMMON_BIG_ENDIAN)
-#define COMMON_BIG_ENDIAN 1
-#endif
-
-// MSVC
-#elif defined(_MSC_VER) && !defined(COMMON_BIG_ENDIAN) && !defined(COMMON_LITTLE_ENDIAN)
-
-#define COMMON_LITTLE_ENDIAN 1
-#endif
-
-// Worst case, default to little endian.
-#if !COMMON_BIG_ENDIAN && !COMMON_LITTLE_ENDIAN
-#define COMMON_LITTLE_ENDIAN 1
-#endif
 
 namespace Common {
 
 #ifdef _MSC_VER
-inline u16 swap16(u16 _data) {
-    return _byteswap_ushort(_data);
+[[nodiscard]] inline u16 swap16(u16 data) noexcept {
+    return _byteswap_ushort(data);
 }
-inline u32 swap32(u32 _data) {
-    return _byteswap_ulong(_data);
+[[nodiscard]] inline u32 swap32(u32 data) noexcept {
+    return _byteswap_ulong(data);
 }
-inline u64 swap64(u64 _data) {
-    return _byteswap_uint64(_data);
+[[nodiscard]] inline u64 swap64(u64 data) noexcept {
+    return _byteswap_uint64(data);
 }
-#elif _M_ARM
-inline u16 swap16(u16 _data) {
-    u32 data = _data;
-    __asm__("rev16 %0, %1\n" : "=l"(data) : "l"(data));
-    return (u16)data;
+#elif defined(__clang__) || defined(__GNUC__)
+#if defined(__Bitrig__) || defined(__OpenBSD__)
+// redefine swap16, swap32, swap64 as inline functions
+#undef swap16
+#undef swap32
+#undef swap64
+#endif
+[[nodiscard]] inline u16 swap16(u16 data) noexcept {
+    return __builtin_bswap16(data);
 }
-inline u32 swap32(u32 _data) {
-    __asm__("rev %0, %1\n" : "=l"(_data) : "l"(_data));
-    return _data;
+[[nodiscard]] inline u32 swap32(u32 data) noexcept {
+    return __builtin_bswap32(data);
 }
-inline u64 swap64(u64 _data) {
-    return ((u64)swap32(_data) << 32) | swap32(_data >> 32);
-}
-#elif __linux__
-inline u16 swap16(u16 _data) {
-    return bswap_16(_data);
-}
-inline u32 swap32(u32 _data) {
-    return bswap_32(_data);
-}
-inline u64 swap64(u64 _data) {
-    return bswap_64(_data);
-}
-#elif __APPLE__
-inline __attribute__((always_inline)) u16 swap16(u16 _data) {
-    return (_data >> 8) | (_data << 8);
-}
-inline __attribute__((always_inline)) u32 swap32(u32 _data) {
-    return __builtin_bswap32(_data);
-}
-inline __attribute__((always_inline)) u64 swap64(u64 _data) {
-    return __builtin_bswap64(_data);
-}
-#elif defined(__Bitrig__) || defined(__OpenBSD__)
-// swap16, swap32, swap64 are left as is
-#elif defined(__DragonFly__) || defined(__FreeBSD__) || defined(__NetBSD__)
-inline u16 swap16(u16 _data) {
-    return bswap16(_data);
-}
-inline u32 swap32(u32 _data) {
-    return bswap32(_data);
-}
-inline u64 swap64(u64 _data) {
-    return bswap64(_data);
+[[nodiscard]] inline u64 swap64(u64 data) noexcept {
+    return __builtin_bswap64(data);
 }
 #else
-// Slow generic implementation.
-inline u16 swap16(u16 data) {
+// Generic implementation.
+[[nodiscard]] inline u16 swap16(u16 data) noexcept {
     return (data >> 8) | (data << 8);
 }
-inline u32 swap32(u32 data) {
-    return (swap16(data) << 16) | swap16(data >> 16);
+[[nodiscard]] inline u32 swap32(u32 data) noexcept {
+    return ((data & 0xFF000000U) >> 24) | ((data & 0x00FF0000U) >> 8) |
+           ((data & 0x0000FF00U) << 8) | ((data & 0x000000FFU) << 24);
 }
-inline u64 swap64(u64 data) {
-    return ((u64)swap32(data) << 32) | swap32(data >> 32);
+[[nodiscard]] inline u64 swap64(u64 data) noexcept {
+    return ((data & 0xFF00000000000000ULL) >> 56) | ((data & 0x00FF000000000000ULL) >> 40) |
+           ((data & 0x0000FF0000000000ULL) >> 24) | ((data & 0x000000FF00000000ULL) >> 8) |
+           ((data & 0x00000000FF000000ULL) << 8) | ((data & 0x0000000000FF0000ULL) << 24) |
+           ((data & 0x000000000000FF00ULL) << 40) | ((data & 0x00000000000000FFULL) << 56);
 }
 #endif
 
-inline float swapf(float f) {
+[[nodiscard]] inline float swapf(float f) noexcept {
     static_assert(sizeof(u32) == sizeof(float), "float must be the same size as uint32_t.");
 
     u32 value;
@@ -139,7 +72,7 @@ inline float swapf(float f) {
     return f;
 }
 
-inline double swapd(double f) {
+[[nodiscard]] inline double swapd(double f) noexcept {
     static_assert(sizeof(u64) == sizeof(double), "double must be the same size as uint64_t.");
 
     u64 value;
@@ -155,17 +88,17 @@ inline double swapd(double f) {
 
 template <typename T, typename F>
 struct swap_struct_t {
-    typedef swap_struct_t<T, F> swapped_t;
+    using swapped_t = swap_struct_t;
 
 protected:
-    T value = T();
+    T value;
 
     static T swap(T v) {
         return F::swap(v);
     }
 
 public:
-    T const swap() const {
+    T swap() const {
         return swap(value);
     }
     swap_struct_t() = default;
@@ -173,39 +106,39 @@ public:
 
     template <typename S>
     swapped_t& operator=(const S& source) {
-        value = swap((T)source);
+        value = swap(static_cast<T>(source));
         return *this;
     }
 
     operator s8() const {
-        return (s8)swap();
+        return static_cast<s8>(swap());
     }
     operator u8() const {
-        return (u8)swap();
+        return static_cast<u8>(swap());
     }
     operator s16() const {
-        return (s16)swap();
+        return static_cast<s16>(swap());
     }
     operator u16() const {
-        return (u16)swap();
+        return static_cast<u16>(swap());
     }
     operator s32() const {
-        return (s32)swap();
+        return static_cast<s32>(swap());
     }
     operator u32() const {
-        return (u32)swap();
+        return static_cast<u32>(swap());
     }
     operator s64() const {
-        return (s64)swap();
+        return static_cast<s64>(swap());
     }
     operator u64() const {
-        return (u64)swap();
+        return static_cast<u64>(swap());
     }
     operator float() const {
-        return (float)swap();
+        return static_cast<float>(swap());
     }
     operator double() const {
-        return (double)swap();
+        return static_cast<double>(swap());
     }
 
     // +v
@@ -241,7 +174,7 @@ public:
     }
     template <typename S>
     swapped_t operator+(const S& i) const {
-        return swap() + (T)i;
+        return swap() + static_cast<T>(i);
     }
     // v - 5
     swapped_t operator-(const swapped_t& i) const {
@@ -249,7 +182,7 @@ public:
     }
     template <typename S>
     swapped_t operator-(const S& i) const {
-        return swap() - (T)i;
+        return swap() - static_cast<T>(i);
     }
 
     // v += 5
@@ -259,7 +192,7 @@ public:
     }
     template <typename S>
     swapped_t& operator+=(const S& i) {
-        value = swap(swap() + (T)i);
+        value = swap(swap() + static_cast<T>(i));
         return *this;
     }
     // v -= 5
@@ -269,7 +202,7 @@ public:
     }
     template <typename S>
     swapped_t& operator-=(const S& i) {
-        value = swap(swap() - (T)i);
+        value = swap(swap() - static_cast<T>(i));
         return *this;
     }
 
@@ -296,7 +229,7 @@ public:
         value = swap(swap() - 1);
         return old;
     }
-    // Comparaison
+    // Comparison
     // v == i
     bool operator==(const swapped_t& i) const {
         return swap() == i.swap();
@@ -435,7 +368,7 @@ public:
     // Member
     /** todo **/
 
-    // Arithmetics
+    // Arithmetic
     template <typename S, typename T2, typename F2>
     friend S operator+(const S& p, const swapped_t v);
 
@@ -451,7 +384,7 @@ public:
     template <typename S, typename T2, typename F2>
     friend S operator%(const S& p, const swapped_t v);
 
-    // Arithmetics + assignements
+    // Arithmetic + assignments
     template <typename S, typename T2, typename F2>
     friend S operator+=(const S& p, const swapped_t v);
 
@@ -482,7 +415,7 @@ public:
     friend bool operator==(const S& p, const swapped_t v);
 };
 
-// Arithmetics
+// Arithmetic
 template <typename S, typename T, typename F>
 S operator+(const S& i, const swap_struct_t<T, F> v) {
     return i + v.swap();
@@ -508,7 +441,7 @@ S operator%(const S& i, const swap_struct_t<T, F> v) {
     return i % v.swap();
 }
 
-// Arithmetics + assignements
+// Arithmetic + assignments
 template <typename S, typename T, typename F>
 S& operator+=(S& i, const swap_struct_t<T, F> v) {
     i += v.swap();
@@ -527,12 +460,7 @@ S operator&(const S& i, const swap_struct_t<T, F> v) {
     return i & v.swap();
 }
 
-template <typename S, typename T, typename F>
-S operator&(const swap_struct_t<T, F> v, const S& i) {
-    return (S)(v.swap() & i);
-}
-
-// Comparaison
+// Comparison
 template <typename S, typename T, typename F>
 bool operator<(const S& p, const swap_struct_t<T, F> v) {
     return p < v.swap();
@@ -593,52 +521,145 @@ struct swap_double_t {
     }
 };
 
-#if COMMON_LITTLE_ENDIAN
-typedef u32 u32_le;
-typedef u16 u16_le;
-typedef u64 u64_le;
+template <typename T>
+struct swap_enum_t {
+    static_assert(std::is_enum_v<T>);
+    using base = std::underlying_type_t<T>;
 
-typedef s32 s32_le;
-typedef s16 s16_le;
-typedef s64 s64_le;
+public:
+    swap_enum_t() = default;
+    swap_enum_t(const T& v) : value(swap(v)) {}
 
-typedef float float_le;
-typedef double double_le;
+    swap_enum_t& operator=(const T& v) {
+        value = swap(v);
+        return *this;
+    }
 
-typedef swap_struct_t<u64, swap_64_t<u64>> u64_be;
-typedef swap_struct_t<s64, swap_64_t<s64>> s64_be;
+    operator T() const {
+        return swap(value);
+    }
 
-typedef swap_struct_t<u32, swap_32_t<u32>> u32_be;
-typedef swap_struct_t<s32, swap_32_t<s32>> s32_be;
+    explicit operator base() const {
+        return static_cast<base>(swap(value));
+    }
 
-typedef swap_struct_t<u16, swap_16_t<u16>> u16_be;
-typedef swap_struct_t<s16, swap_16_t<s16>> s16_be;
+protected:
+    T value{};
+    // clang-format off
+    using swap_t = std::conditional_t<
+        std::is_same_v<base, u16>, swap_16_t<u16>, std::conditional_t<
+        std::is_same_v<base, s16>, swap_16_t<s16>, std::conditional_t<
+        std::is_same_v<base, u32>, swap_32_t<u32>, std::conditional_t<
+        std::is_same_v<base, s32>, swap_32_t<s32>, std::conditional_t<
+        std::is_same_v<base, u64>, swap_64_t<u64>, std::conditional_t<
+        std::is_same_v<base, s64>, swap_64_t<s64>, void>>>>>>;
+    // clang-format on
+    static T swap(T x) {
+        return static_cast<T>(swap_t::swap(static_cast<base>(x)));
+    }
+};
 
-typedef swap_struct_t<float, swap_float_t<float>> float_be;
-typedef swap_struct_t<double, swap_double_t<double>> double_be;
-#else
+struct SwapTag {}; // Use the different endianness from the system
+struct KeepTag {}; // Use the same endianness as the system
 
-typedef swap_struct_t<u64, swap_64_t<u64>> u64_le;
-typedef swap_struct_t<s64, swap_64_t<s64>> s64_le;
+template <typename T, typename Tag>
+struct AddEndian;
 
-typedef swap_struct_t<u32, swap_32_t<u32>> u32_le;
-typedef swap_struct_t<s32, swap_32_t<s32>> s32_le;
+// KeepTag specializations
 
-typedef swap_struct_t<u16, swap_16_t<u16>> u16_le;
-typedef swap_struct_t<s16, swap_16_t<s16>> s16_le;
+template <typename T>
+struct AddEndian<T, KeepTag> {
+    using type = T;
+};
 
-typedef swap_struct_t<float, swap_float_t<float>> float_le;
-typedef swap_struct_t<double, swap_double_t<double>> double_le;
+// SwapTag specializations
 
-typedef u32 u32_be;
-typedef u16 u16_be;
-typedef u64 u64_be;
+template <>
+struct AddEndian<u8, SwapTag> {
+    using type = u8;
+};
 
-typedef s32 s32_be;
-typedef s16 s16_be;
-typedef s64 s64_be;
+template <>
+struct AddEndian<u16, SwapTag> {
+    using type = swap_struct_t<u16, swap_16_t<u16>>;
+};
 
-typedef float float_be;
-typedef double double_be;
+template <>
+struct AddEndian<u32, SwapTag> {
+    using type = swap_struct_t<u32, swap_32_t<u32>>;
+};
 
-#endif
+template <>
+struct AddEndian<u64, SwapTag> {
+    using type = swap_struct_t<u64, swap_64_t<u64>>;
+};
+
+template <>
+struct AddEndian<s8, SwapTag> {
+    using type = s8;
+};
+
+template <>
+struct AddEndian<s16, SwapTag> {
+    using type = swap_struct_t<s16, swap_16_t<s16>>;
+};
+
+template <>
+struct AddEndian<s32, SwapTag> {
+    using type = swap_struct_t<s32, swap_32_t<s32>>;
+};
+
+template <>
+struct AddEndian<s64, SwapTag> {
+    using type = swap_struct_t<s64, swap_64_t<s64>>;
+};
+
+template <>
+struct AddEndian<float, SwapTag> {
+    using type = swap_struct_t<float, swap_float_t<float>>;
+};
+
+template <>
+struct AddEndian<double, SwapTag> {
+    using type = swap_struct_t<double, swap_double_t<double>>;
+};
+
+template <typename T>
+struct AddEndian<T, SwapTag> {
+    static_assert(std::is_enum_v<T>);
+    using type = swap_enum_t<T>;
+};
+
+// Alias LETag/BETag as KeepTag/SwapTag depending on the system
+using LETag = std::conditional_t<std::endian::native == std::endian::little, KeepTag, SwapTag>;
+using BETag = std::conditional_t<std::endian::native == std::endian::big, KeepTag, SwapTag>;
+
+// Aliases for LE types
+using u16_le = AddEndian<u16, LETag>::type;
+using u32_le = AddEndian<u32, LETag>::type;
+using u64_le = AddEndian<u64, LETag>::type;
+
+using s16_le = AddEndian<s16, LETag>::type;
+using s32_le = AddEndian<s32, LETag>::type;
+using s64_le = AddEndian<s64, LETag>::type;
+
+template <typename T>
+using enum_le = std::enable_if_t<std::is_enum_v<T>, typename AddEndian<T, LETag>::type>;
+
+using float_le = AddEndian<float, LETag>::type;
+using double_le = AddEndian<double, LETag>::type;
+
+// Aliases for BE types
+using u16_be = AddEndian<u16, BETag>::type;
+using u32_be = AddEndian<u32, BETag>::type;
+using u64_be = AddEndian<u64, BETag>::type;
+
+using s16_be = AddEndian<s16, BETag>::type;
+using s32_be = AddEndian<s32, BETag>::type;
+using s64_be = AddEndian<s64, BETag>::type;
+
+template <typename T>
+using enum_be = std::enable_if_t<std::is_enum_v<T>, typename AddEndian<T, BETag>::type>;
+
+using float_be = AddEndian<float, BETag>::type;
+using double_be = AddEndian<double, BETag>::type;

@@ -1,110 +1,44 @@
-// Copyright 2014 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2014 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <cmath>
 #include <mutex>
 #include "core/frontend/emu_window.h"
-#include "core/frontend/input.h"
-#include "core/settings.h"
 
-class EmuWindow::TouchState : public Input::Factory<Input::TouchDevice>,
-                              public std::enable_shared_from_this<TouchState> {
-public:
-    std::unique_ptr<Input::TouchDevice> Create(const Common::ParamPackage&) override {
-        return std::make_unique<Device>(shared_from_this());
-    }
-
-    std::mutex mutex;
-
-    bool touch_pressed = false; ///< True if touchpad area is currently pressed, otherwise false
-
-    float touch_x = 0.0f; ///< Touchpad X-position
-    float touch_y = 0.0f; ///< Touchpad Y-position
-
-private:
-    class Device : public Input::TouchDevice {
-    public:
-        explicit Device(std::weak_ptr<TouchState>&& touch_state) : touch_state(touch_state) {}
-        std::tuple<float, float, bool> GetStatus() const override {
-            if (auto state = touch_state.lock()) {
-                std::lock_guard<std::mutex> guard(state->mutex);
-                return std::make_tuple(state->touch_x, state->touch_y, state->touch_pressed);
-            }
-            return std::make_tuple(0.0f, 0.0f, false);
-        }
-
-    private:
-        std::weak_ptr<TouchState> touch_state;
-    };
-};
+namespace Core::Frontend {
 
 EmuWindow::EmuWindow() {
     // TODO: Find a better place to set this.
     config.min_client_area_size =
-        std::make_pair(Layout::ScreenUndocked::Width, Layout::ScreenUndocked::Height);
+        std::make_pair(Layout::MinimumSize::Width, Layout::MinimumSize::Height);
     active_config = config;
-    touch_state = std::make_shared<TouchState>();
-    Input::RegisterFactory<Input::TouchDevice>("emu_window", touch_state);
 }
 
-EmuWindow::~EmuWindow() {
-    Input::UnregisterFactory<Input::TouchDevice>("emu_window");
+EmuWindow::~EmuWindow() {}
+
+std::pair<f32, f32> EmuWindow::MapToTouchScreen(u32 framebuffer_x, u32 framebuffer_y) const {
+    std::tie(framebuffer_x, framebuffer_y) = ClipToTouchScreen(framebuffer_x, framebuffer_y);
+    const float x =
+        static_cast<float>(framebuffer_x - framebuffer_layout.screen.left) /
+        static_cast<float>(framebuffer_layout.screen.right - framebuffer_layout.screen.left);
+    const float y =
+        static_cast<float>(framebuffer_y - framebuffer_layout.screen.top) /
+        static_cast<float>(framebuffer_layout.screen.bottom - framebuffer_layout.screen.top);
+
+    return std::make_pair(x, y);
 }
 
-/**
- * Check if the given x/y coordinates are within the touchpad specified by the framebuffer layout
- * @param layout FramebufferLayout object describing the framebuffer size and screen positions
- * @param framebuffer_x Framebuffer x-coordinate to check
- * @param framebuffer_y Framebuffer y-coordinate to check
- * @return True if the coordinates are within the touchpad, otherwise false
- */
-static bool IsWithinTouchscreen(const Layout::FramebufferLayout& layout, unsigned framebuffer_x,
-                                unsigned framebuffer_y) {
-    return (framebuffer_y >= layout.screen.top && framebuffer_y < layout.screen.bottom &&
-            framebuffer_x >= layout.screen.left && framebuffer_x < layout.screen.right);
-}
-
-std::tuple<unsigned, unsigned> EmuWindow::ClipToTouchScreen(unsigned new_x, unsigned new_y) {
+std::pair<u32, u32> EmuWindow::ClipToTouchScreen(u32 new_x, u32 new_y) const {
     new_x = std::max(new_x, framebuffer_layout.screen.left);
     new_x = std::min(new_x, framebuffer_layout.screen.right - 1);
 
     new_y = std::max(new_y, framebuffer_layout.screen.top);
     new_y = std::min(new_y, framebuffer_layout.screen.bottom - 1);
 
-    return std::make_tuple(new_x, new_y);
+    return std::make_pair(new_x, new_y);
 }
 
-void EmuWindow::TouchPressed(unsigned framebuffer_x, unsigned framebuffer_y) {
-    if (!IsWithinTouchscreen(framebuffer_layout, framebuffer_x, framebuffer_y))
-        return;
-
-    std::lock_guard<std::mutex> guard(touch_state->mutex);
-    touch_state->touch_x = static_cast<float>(framebuffer_x - framebuffer_layout.screen.left) /
-                           (framebuffer_layout.screen.right - framebuffer_layout.screen.left);
-    touch_state->touch_y = static_cast<float>(framebuffer_y - framebuffer_layout.screen.top) /
-                           (framebuffer_layout.screen.bottom - framebuffer_layout.screen.top);
-
-    touch_state->touch_pressed = true;
-}
-
-void EmuWindow::TouchReleased() {
-    std::lock_guard<std::mutex> guard(touch_state->mutex);
-    touch_state->touch_pressed = false;
-    touch_state->touch_x = 0;
-    touch_state->touch_y = 0;
-}
-
-void EmuWindow::TouchMoved(unsigned framebuffer_x, unsigned framebuffer_y) {
-    if (!touch_state->touch_pressed)
-        return;
-
-    if (!IsWithinTouchscreen(framebuffer_layout, framebuffer_x, framebuffer_y))
-        std::tie(framebuffer_x, framebuffer_y) = ClipToTouchScreen(framebuffer_x, framebuffer_y);
-
-    TouchPressed(framebuffer_x, framebuffer_y);
-}
-
-void EmuWindow::UpdateCurrentFramebufferLayout(unsigned width, unsigned height) {
+void EmuWindow::UpdateCurrentFramebufferLayout(u32 width, u32 height) {
     NotifyFramebufferLayoutChanged(Layout::DefaultFrameLayout(width, height));
 }
+
+} // namespace Core::Frontend

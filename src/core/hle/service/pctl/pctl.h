@@ -1,16 +1,14 @@
-// Copyright 2018 yuzu emulator team
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
-#include "core/hle/service/service.h"
+namespace Core {
+class System;
+}
 
-namespace Service {
-namespace PCTL {
+namespace Service::PCTL {
 
-/// Registers all PCTL services with the specified service manager.
-void InstallInterfaces(SM::ServiceManager& service_manager);
+void LoopProcess(Core::System& system);
 
-} // namespace PCTL
-} // namespace Service
+} // namespace Service::PCTL

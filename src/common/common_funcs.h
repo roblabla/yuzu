@@ -1,83 +1,49 @@
-// Copyright 2013 Dolphin Emulator Project / 2014 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
-#if !defined(ARCHITECTURE_x86_64) && !defined(_M_ARM)
+#include <array>
+#include <iterator>
+
+#if !defined(ARCHITECTURE_x86_64)
 #include <cstdlib> // for exit
 #endif
 #include "common/common_types.h"
-
-#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
 /// Textually concatenates two tokens. The double-expansion is required by the C preprocessor.
 #define CONCAT2(x, y) DO_CONCAT2(x, y)
 #define DO_CONCAT2(x, y) x##y
 
-// helper macro to properly align structure members.
-// Calling INSERT_PADDING_BYTES will add a new member variable with a name like "pad121",
-// depending on the current source line to make sure variable names are unique.
-#define INSERT_PADDING_BYTES(num_bytes) u8 CONCAT2(pad, __LINE__)[(num_bytes)]
-#define INSERT_PADDING_WORDS(num_words) u32 CONCAT2(pad, __LINE__)[(num_words)]
+/// Helper macros to insert unused bytes or words to properly align structs. These values will be
+/// zero-initialized.
+#define INSERT_PADDING_BYTES(num_bytes)                                                            \
+    [[maybe_unused]] std::array<u8, num_bytes> CONCAT2(pad, __LINE__) {}
+#define INSERT_PADDING_WORDS(num_words)                                                            \
+    [[maybe_unused]] std::array<u32, num_words> CONCAT2(pad, __LINE__) {}
 
-// Inlining
-#ifdef _WIN32
-#define FORCE_INLINE __forceinline
-#else
-#define FORCE_INLINE inline __attribute__((always_inline))
-#endif
+/// These are similar to the INSERT_PADDING_* macros but do not zero-initialize the contents.
+/// This keeps the structure trivial to construct.
+#define INSERT_PADDING_BYTES_NOINIT(num_bytes)                                                     \
+    [[maybe_unused]] std::array<u8, num_bytes> CONCAT2(pad, __LINE__)
+#define INSERT_PADDING_WORDS_NOINIT(num_words)                                                     \
+    [[maybe_unused]] std::array<u32, num_words> CONCAT2(pad, __LINE__)
 
 #ifndef _MSC_VER
 
-#ifdef ARCHITECTURE_x86_64
+#if defined(ARCHITECTURE_x86_64)
 #define Crash() __asm__ __volatile__("int $3")
-#elif defined(_M_ARM)
-#define Crash() __asm__ __volatile__("trap")
+#elif defined(ARCHITECTURE_arm64)
+#define Crash() __asm__ __volatile__("brk #0")
 #else
 #define Crash() exit(1)
 #endif
 
-// GCC 4.8 defines all the rotate functions now
-// Small issue with GCC's lrotl/lrotr intrinsics is they are still 32bit while we require 64bit
-#ifdef _rotl
-#define rotl _rotl
-#else
-inline u32 rotl(u32 x, int shift) {
-    shift &= 31;
-    if (!shift)
-        return x;
-    return (x << shift) | (x >> (32 - shift));
-}
-#endif
-
-#ifdef _rotr
-#define rotr _rotr
-#else
-inline u32 rotr(u32 x, int shift) {
-    shift &= 31;
-    if (!shift)
-        return x;
-    return (x >> shift) | (x << (32 - shift));
-}
-#endif
-
-inline u64 _rotl64(u64 x, unsigned int shift) {
-    unsigned int n = shift % 64;
-    return (x << n) | (x >> (64 - n));
-}
-
-inline u64 _rotr64(u64 x, unsigned int shift) {
-    unsigned int n = shift % 64;
-    return (x >> n) | (x << (64 - n));
-}
+#define LTO_NOINLINE __attribute__((noinline))
 
 #else // _MSC_VER
 
-#if (_MSC_VER < 1900)
-// Function Cross-Compatibility
-#define snprintf _snprintf
-#endif
+#define LTO_NOINLINE
 
 // Locale Cross-Compatibility
 #define locale_t _locale_t
@@ -87,22 +53,95 @@ __declspec(dllimport) void __stdcall DebugBreak(void);
 }
 #define Crash() DebugBreak()
 
-// cstdlib provides these on MSVC
-#define rotr _rotr
-#define rotl _rotl
-
 #endif // _MSC_VER ndef
 
-// Generic function to get last error message.
-// Call directly after the command or use the error num.
-// This function might change the error code.
-// Defined in Misc.cpp.
-const char* GetLastErrorMsg();
+#define DECLARE_ENUM_FLAG_OPERATORS(type)                                                          \
+    [[nodiscard]] constexpr type operator|(type a, type b) noexcept {                              \
+        using T = std::underlying_type_t<type>;                                                    \
+        return static_cast<type>(static_cast<T>(a) | static_cast<T>(b));                           \
+    }                                                                                              \
+    [[nodiscard]] constexpr type operator&(type a, type b) noexcept {                              \
+        using T = std::underlying_type_t<type>;                                                    \
+        return static_cast<type>(static_cast<T>(a) & static_cast<T>(b));                           \
+    }                                                                                              \
+    [[nodiscard]] constexpr type operator^(type a, type b) noexcept {                              \
+        using T = std::underlying_type_t<type>;                                                    \
+        return static_cast<type>(static_cast<T>(a) ^ static_cast<T>(b));                           \
+    }                                                                                              \
+    [[nodiscard]] constexpr type operator<<(type a, type b) noexcept {                             \
+        using T = std::underlying_type_t<type>;                                                    \
+        return static_cast<type>(static_cast<T>(a) << static_cast<T>(b));                          \
+    }                                                                                              \
+    [[nodiscard]] constexpr type operator>>(type a, type b) noexcept {                             \
+        using T = std::underlying_type_t<type>;                                                    \
+        return static_cast<type>(static_cast<T>(a) >> static_cast<T>(b));                          \
+    }                                                                                              \
+    constexpr type& operator|=(type& a, type b) noexcept {                                         \
+        a = a | b;                                                                                 \
+        return a;                                                                                  \
+    }                                                                                              \
+    constexpr type& operator&=(type& a, type b) noexcept {                                         \
+        a = a & b;                                                                                 \
+        return a;                                                                                  \
+    }                                                                                              \
+    constexpr type& operator^=(type& a, type b) noexcept {                                         \
+        a = a ^ b;                                                                                 \
+        return a;                                                                                  \
+    }                                                                                              \
+    constexpr type& operator<<=(type& a, type b) noexcept {                                        \
+        a = a << b;                                                                                \
+        return a;                                                                                  \
+    }                                                                                              \
+    constexpr type& operator>>=(type& a, type b) noexcept {                                        \
+        a = a >> b;                                                                                \
+        return a;                                                                                  \
+    }                                                                                              \
+    [[nodiscard]] constexpr type operator~(type key) noexcept {                                    \
+        using T = std::underlying_type_t<type>;                                                    \
+        return static_cast<type>(~static_cast<T>(key));                                            \
+    }                                                                                              \
+    [[nodiscard]] constexpr bool True(type key) noexcept {                                         \
+        using T = std::underlying_type_t<type>;                                                    \
+        return static_cast<T>(key) != 0;                                                           \
+    }                                                                                              \
+    [[nodiscard]] constexpr bool False(type key) noexcept {                                        \
+        using T = std::underlying_type_t<type>;                                                    \
+        return static_cast<T>(key) == 0;                                                           \
+    }
+
+#define YUZU_NON_COPYABLE(cls)                                                                     \
+    cls(const cls&) = delete;                                                                      \
+    cls& operator=(const cls&) = delete
+
+#define YUZU_NON_MOVEABLE(cls)                                                                     \
+    cls(cls&&) = delete;                                                                           \
+    cls& operator=(cls&&) = delete
 
 namespace Common {
 
-constexpr u32 MakeMagic(char a, char b, char c, char d) {
-    return a | b << 8 | c << 16 | d << 24;
+[[nodiscard]] constexpr u32 MakeMagic(char a, char b, char c, char d) {
+    return u32(a) | u32(b) << 8 | u32(c) << 16 | u32(d) << 24;
+}
+
+[[nodiscard]] constexpr u64 MakeMagic(char a, char b, char c, char d, char e, char f, char g,
+                                      char h) {
+    return u64(a) << 0 | u64(b) << 8 | u64(c) << 16 | u64(d) << 24 | u64(e) << 32 | u64(f) << 40 |
+           u64(g) << 48 | u64(h) << 56;
+}
+
+// std::size() does not support zero-size C arrays. We're fixing that.
+template <class C>
+constexpr auto Size(const C& c) -> decltype(c.size()) {
+    return std::size(c);
+}
+
+template <class C>
+constexpr std::size_t Size(const C& c) {
+    if constexpr (sizeof(C) == 0) {
+        return 0;
+    } else {
+        return std::size(c);
+    }
 }
 
 } // namespace Common

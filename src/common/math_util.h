@@ -1,6 +1,6 @@
-// Copyright 2013 Dolphin Emulator Project / 2014 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2013 Dolphin Emulator Project
+// SPDX-FileCopyrightText: 2014 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
@@ -8,48 +8,92 @@
 #include <cstdlib>
 #include <type_traits>
 
-namespace MathUtil {
+namespace Common {
 
-static constexpr float PI = 3.14159265f;
-
-inline bool IntervalsIntersect(unsigned start0, unsigned length0, unsigned start1,
-                               unsigned length1) {
-    return (std::max(start0, start1) < std::min(start0 + length0, start1 + length1));
-}
-
-template <typename T>
-inline T Clamp(const T val, const T& min, const T& max) {
-    return std::max(min, std::min(max, val));
-}
+constexpr float PI = 3.1415926535f;
 
 template <class T>
 struct Rectangle {
-    T left;
-    T top;
-    T right;
-    T bottom;
+    T left{};
+    T top{};
+    T right{};
+    T bottom{};
 
-    Rectangle() {}
+    constexpr Rectangle() = default;
 
-    Rectangle(T left, T top, T right, T bottom)
-        : left(left), top(top), right(right), bottom(bottom) {}
+    constexpr Rectangle(T width, T height) : right(width), bottom(height) {}
 
-    T GetWidth() const {
-        return std::abs(static_cast<typename std::make_signed<T>::type>(right - left));
+    constexpr Rectangle(T left_, T top_, T right_, T bottom_)
+        : left(left_), top(top_), right(right_), bottom(bottom_) {}
+
+    [[nodiscard]] constexpr T Left() const {
+        return left;
     }
-    T GetHeight() const {
-        return std::abs(static_cast<typename std::make_signed<T>::type>(bottom - top));
+
+    [[nodiscard]] constexpr T Top() const {
+        return top;
     }
-    Rectangle<T> TranslateX(const T x) const {
+
+    [[nodiscard]] constexpr T Right() const {
+        return right;
+    }
+
+    [[nodiscard]] constexpr T Bottom() const {
+        return bottom;
+    }
+
+    [[nodiscard]] constexpr bool IsEmpty() const {
+        return (GetWidth() <= 0) || (GetHeight() <= 0);
+    }
+
+    [[nodiscard]] constexpr T GetWidth() const {
+        if constexpr (std::is_floating_point_v<T>) {
+            return std::abs(right - left);
+        } else {
+            return static_cast<T>(std::abs(static_cast<std::make_signed_t<T>>(right - left)));
+        }
+    }
+
+    [[nodiscard]] constexpr T GetHeight() const {
+        if constexpr (std::is_floating_point_v<T>) {
+            return std::abs(bottom - top);
+        } else {
+            return static_cast<T>(std::abs(static_cast<std::make_signed_t<T>>(bottom - top)));
+        }
+    }
+
+    [[nodiscard]] constexpr Rectangle<T> TranslateX(const T x) const {
         return Rectangle{left + x, top, right + x, bottom};
     }
-    Rectangle<T> TranslateY(const T y) const {
+
+    [[nodiscard]] constexpr Rectangle<T> TranslateY(const T y) const {
         return Rectangle{left, top + y, right, bottom + y};
     }
-    Rectangle<T> Scale(const float s) const {
-        return Rectangle{left, top, static_cast<T>(left + GetWidth() * s),
-                         static_cast<T>(top + GetHeight() * s)};
+
+    [[nodiscard]] constexpr Rectangle<T> Scale(const float s) const {
+        return Rectangle{left, top, static_cast<T>(static_cast<float>(left + GetWidth()) * s),
+                         static_cast<T>(static_cast<float>(top + GetHeight()) * s)};
+    }
+
+    [[nodiscard]] constexpr bool operator==(const Rectangle<T>& rhs) const {
+        return (left == rhs.left) && (top == rhs.top) && (right == rhs.right) &&
+               (bottom == rhs.bottom);
+    }
+
+    [[nodiscard]] constexpr bool operator!=(const Rectangle<T>& rhs) const {
+        return !operator==(rhs);
+    }
+
+    [[nodiscard]] constexpr bool Intersect(const Rectangle<T>& with, Rectangle<T>* result) const {
+        result->left = std::max(left, with.left);
+        result->top = std::max(top, with.top);
+        result->right = std::min(right, with.right);
+        result->bottom = std::min(bottom, with.bottom);
+        return !result->IsEmpty();
     }
 };
 
-} // namespace MathUtil
+template <typename T>
+Rectangle(T, T, T, T) -> Rectangle<T>;
+
+} // namespace Common

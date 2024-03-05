@@ -1,99 +1,111 @@
-// Copyright 2014 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2014 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <string_view>
 #include <vector>
 #include <glad/glad.h>
-#include "common/assert.h"
+
 #include "common/logging/log.h"
+#include "common/settings.h"
 #include "video_core/renderer_opengl/gl_shader_util.h"
 
-namespace GLShader {
+namespace OpenGL {
 
-GLuint LoadProgram(const char* vertex_shader, const char* fragment_shader) {
-
-    // Create the shaders
-    GLuint vertex_shader_id = glCreateShader(GL_VERTEX_SHADER);
-    GLuint fragment_shader_id = glCreateShader(GL_FRAGMENT_SHADER);
-
-    GLint result = GL_FALSE;
-    int info_log_length;
-
-    // Compile Vertex Shader
-    LOG_DEBUG(Render_OpenGL, "Compiling vertex shader...");
-
-    glShaderSource(vertex_shader_id, 1, &vertex_shader, nullptr);
-    glCompileShader(vertex_shader_id);
-
-    // Check Vertex Shader
-    glGetShaderiv(vertex_shader_id, GL_COMPILE_STATUS, &result);
-    glGetShaderiv(vertex_shader_id, GL_INFO_LOG_LENGTH, &info_log_length);
-
-    if (info_log_length > 1) {
-        std::vector<char> vertex_shader_error(info_log_length);
-        glGetShaderInfoLog(vertex_shader_id, info_log_length, nullptr, &vertex_shader_error[0]);
-        if (result == GL_TRUE) {
-            LOG_DEBUG(Render_OpenGL, "%s", &vertex_shader_error[0]);
-        } else {
-            LOG_ERROR(Render_OpenGL, "Error compiling vertex shader:\n%s", &vertex_shader_error[0]);
-        }
+static OGLProgram LinkSeparableProgram(GLuint shader) {
+    OGLProgram program;
+    program.handle = glCreateProgram();
+    glProgramParameteri(program.handle, GL_PROGRAM_SEPARABLE, GL_TRUE);
+    glAttachShader(program.handle, shader);
+    glLinkProgram(program.handle);
+    glDetachShader(program.handle, shader);
+    if (!Settings::values.renderer_debug) {
+        return program;
     }
+    GLint link_status{};
+    glGetProgramiv(program.handle, GL_LINK_STATUS, &link_status);
 
-    // Compile Fragment Shader
-    LOG_DEBUG(Render_OpenGL, "Compiling fragment shader...");
-
-    glShaderSource(fragment_shader_id, 1, &fragment_shader, nullptr);
-    glCompileShader(fragment_shader_id);
-
-    // Check Fragment Shader
-    glGetShaderiv(fragment_shader_id, GL_COMPILE_STATUS, &result);
-    glGetShaderiv(fragment_shader_id, GL_INFO_LOG_LENGTH, &info_log_length);
-
-    if (info_log_length > 1) {
-        std::vector<char> fragment_shader_error(info_log_length);
-        glGetShaderInfoLog(fragment_shader_id, info_log_length, nullptr, &fragment_shader_error[0]);
-        if (result == GL_TRUE) {
-            LOG_DEBUG(Render_OpenGL, "%s", &fragment_shader_error[0]);
-        } else {
-            LOG_ERROR(Render_OpenGL, "Error compiling fragment shader:\n%s",
-                      &fragment_shader_error[0]);
-        }
+    GLint log_length{};
+    glGetProgramiv(program.handle, GL_INFO_LOG_LENGTH, &log_length);
+    if (log_length == 0) {
+        return program;
     }
-
-    // Link the program
-    LOG_DEBUG(Render_OpenGL, "Linking program...");
-
-    GLuint program_id = glCreateProgram();
-    glAttachShader(program_id, vertex_shader_id);
-    glAttachShader(program_id, fragment_shader_id);
-
-    glLinkProgram(program_id);
-
-    // Check the program
-    glGetProgramiv(program_id, GL_LINK_STATUS, &result);
-    glGetProgramiv(program_id, GL_INFO_LOG_LENGTH, &info_log_length);
-
-    if (info_log_length > 1) {
-        std::vector<char> program_error(info_log_length);
-        glGetProgramInfoLog(program_id, info_log_length, nullptr, &program_error[0]);
-        if (result == GL_TRUE) {
-            LOG_DEBUG(Render_OpenGL, "%s", &program_error[0]);
-        } else {
-            LOG_ERROR(Render_OpenGL, "Error linking shader:\n%s", &program_error[0]);
-        }
+    std::string log(log_length, 0);
+    glGetProgramInfoLog(program.handle, log_length, nullptr, log.data());
+    if (link_status == GL_FALSE) {
+        LOG_ERROR(Render_OpenGL, "{}", log);
+    } else {
+        LOG_WARNING(Render_OpenGL, "{}", log);
     }
-
-    // If the program linking failed at least one of the shaders was probably bad
-    if (result == GL_FALSE) {
-        LOG_ERROR(Render_OpenGL, "Vertex shader:\n%s", vertex_shader);
-        LOG_ERROR(Render_OpenGL, "Fragment shader:\n%s", fragment_shader);
-    }
-    ASSERT_MSG(result == GL_TRUE, "Shader not linked");
-
-    glDeleteShader(vertex_shader_id);
-    glDeleteShader(fragment_shader_id);
-
-    return program_id;
+    return program;
 }
 
-} // namespace GLShader
+static void LogShader(GLuint shader, std::string_view code = {}) {
+    GLint shader_status{};
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &shader_status);
+    if (shader_status == GL_FALSE) {
+        LOG_ERROR(Render_OpenGL, "Failed to build shader");
+    }
+    GLint log_length{};
+    glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &log_length);
+    if (log_length == 0) {
+        return;
+    }
+    std::string log(log_length, 0);
+    glGetShaderInfoLog(shader, log_length, nullptr, log.data());
+    if (shader_status == GL_FALSE) {
+        LOG_ERROR(Render_OpenGL, "{}", log);
+        if (!code.empty()) {
+            LOG_INFO(Render_OpenGL, "\n{}", code);
+        }
+    } else {
+        LOG_WARNING(Render_OpenGL, "{}", log);
+    }
+}
+
+OGLProgram CreateProgram(std::string_view code, GLenum stage) {
+    OGLShader shader;
+    shader.handle = glCreateShader(stage);
+
+    const GLint length = static_cast<GLint>(code.size());
+    const GLchar* const code_ptr = code.data();
+    glShaderSource(shader.handle, 1, &code_ptr, &length);
+    glCompileShader(shader.handle);
+    if (Settings::values.renderer_debug) {
+        LogShader(shader.handle, code);
+    }
+    return LinkSeparableProgram(shader.handle);
+}
+
+OGLProgram CreateProgram(std::span<const u32> code, GLenum stage) {
+    OGLShader shader;
+    shader.handle = glCreateShader(stage);
+
+    glShaderBinary(1, &shader.handle, GL_SHADER_BINARY_FORMAT_SPIR_V_ARB, code.data(),
+                   static_cast<GLsizei>(code.size_bytes()));
+    glSpecializeShader(shader.handle, "main", 0, nullptr, nullptr);
+    if (Settings::values.renderer_debug) {
+        LogShader(shader.handle);
+    }
+    return LinkSeparableProgram(shader.handle);
+}
+
+OGLAssemblyProgram CompileProgram(std::string_view code, GLenum target) {
+    OGLAssemblyProgram program;
+    glGenProgramsARB(1, &program.handle);
+    glNamedProgramStringEXT(program.handle, target, GL_PROGRAM_FORMAT_ASCII_ARB,
+                            static_cast<GLsizei>(code.size()), code.data());
+    if (Settings::values.renderer_debug) {
+        const auto err = reinterpret_cast<const char*>(glGetString(GL_PROGRAM_ERROR_STRING_NV));
+        if (err && *err) {
+            if (std::strstr(err, "error")) {
+                LOG_CRITICAL(Render_OpenGL, "\n{}", err);
+                LOG_INFO(Render_OpenGL, "\n{}", code);
+            } else {
+                LOG_WARNING(Render_OpenGL, "\n{}", err);
+            }
+        }
+    }
+    return program;
+}
+
+} // namespace OpenGL

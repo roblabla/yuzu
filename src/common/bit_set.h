@@ -1,244 +1,86 @@
-// This file is under the public domain.
+// SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
-#include <cstddef>
-#ifdef _WIN32
-#include <intrin.h>
-#endif
-#include <initializer_list>
-#include <new>
-#include <type_traits>
+#include <array>
+#include <bit>
+
+#include "common/alignment.h"
+#include "common/bit_util.h"
 #include "common/common_types.h"
 
-// namespace avoids conflict with OS X Carbon; don't use BitSet<T> directly
 namespace Common {
 
-// Helper functions:
+namespace impl {
 
-#ifdef _MSC_VER
-template <typename T>
-static inline int CountSetBits(T v) {
-    // from https://graphics.stanford.edu/~seander/bithacks.html
-    // GCC has this built in, but MSVC's intrinsic will only emit the actual
-    // POPCNT instruction, which we're not depending on
-    v = v - ((v >> 1) & (T) ~(T)0 / 3);
-    v = (v & (T) ~(T)0 / 15 * 3) + ((v >> 2) & (T) ~(T)0 / 15 * 3);
-    v = (v + (v >> 4)) & (T) ~(T)0 / 255 * 15;
-    return (T)(v * ((T) ~(T)0 / 255)) >> (sizeof(T) - 1) * 8;
-}
-static inline int LeastSignificantSetBit(u8 val) {
-    unsigned long index;
-    _BitScanForward(&index, val);
-    return (int)index;
-}
-static inline int LeastSignificantSetBit(u16 val) {
-    unsigned long index;
-    _BitScanForward(&index, val);
-    return (int)index;
-}
-static inline int LeastSignificantSetBit(u32 val) {
-    unsigned long index;
-    _BitScanForward(&index, val);
-    return (int)index;
-}
-static inline int LeastSignificantSetBit(u64 val) {
-    unsigned long index;
-    _BitScanForward64(&index, val);
-    return (int)index;
-}
-#else
-static inline int CountSetBits(u8 val) {
-    return __builtin_popcount(val);
-}
-static inline int CountSetBits(u16 val) {
-    return __builtin_popcount(val);
-}
-static inline int CountSetBits(u32 val) {
-    return __builtin_popcount(val);
-}
-static inline int CountSetBits(u64 val) {
-    return __builtin_popcountll(val);
-}
-static inline int LeastSignificantSetBit(u8 val) {
-    return __builtin_ctz(val);
-}
-static inline int LeastSignificantSetBit(u16 val) {
-    return __builtin_ctz(val);
-}
-static inline int LeastSignificantSetBit(u32 val) {
-    return __builtin_ctz(val);
-}
-static inline int LeastSignificantSetBit(u64 val) {
-    return __builtin_ctzll(val);
-}
-#endif
-
-// Similar to std::bitset, this is a class which encapsulates a bitset, i.e.
-// using the set bits of an integer to represent a set of integers.  Like that
-// class, it acts like an array of bools:
-//     BitSet32 bs;
-//     bs[1] = true;
-// but also like the underlying integer ([0] = least significant bit):
-//     BitSet32 bs2 = ...;
-//     bs = (bs ^ bs2) & BitSet32(0xffff);
-// The following additional functionality is provided:
-// - Construction using an initializer list.
-//     BitSet bs { 1, 2, 4, 8 };
-// - Efficiently iterating through the set bits:
-//     for (int i : bs)
-//         [i is the *index* of a set bit]
-//   (This uses the appropriate CPU instruction to find the next set bit in one
-//   operation.)
-// - Counting set bits using .Count() - see comment on that method.
-
-// TODO: use constexpr when MSVC gets out of the Dark Ages
-
-template <typename IntTy>
+template <typename Storage, size_t N>
 class BitSet {
-    static_assert(!std::is_signed<IntTy>::value, "BitSet should not be used with signed types");
 
 public:
-    // A reference to a particular bit, returned from operator[].
-    class Ref {
-    public:
-        Ref(Ref&& other) : m_bs(other.m_bs), m_mask(other.m_mask) {}
-        Ref(BitSet* bs, IntTy mask) : m_bs(bs), m_mask(mask) {}
-        operator bool() const {
-            return (m_bs->m_val & m_mask) != 0;
-        }
-        bool operator=(bool set) {
-            m_bs->m_val = (m_bs->m_val & ~m_mask) | (set ? m_mask : 0);
-            return set;
-        }
+    constexpr BitSet() = default;
 
-    private:
-        BitSet* m_bs;
-        IntTy m_mask;
-    };
+    constexpr void SetBit(size_t i) {
+        this->words[i / FlagsPerWord] |= GetBitMask(i % FlagsPerWord);
+    }
 
-    // A STL-like iterator is required to be able to use range-based for loops.
-    class Iterator {
-    public:
-        Iterator(const Iterator& other) : m_val(other.m_val), m_bit(other.m_bit) {}
-        Iterator(IntTy val) : m_val(val), m_bit(0) {}
-        Iterator& operator=(Iterator other) {
-            new (this) Iterator(other);
-            return *this;
-        }
-        int operator*() {
-            return m_bit + ComputeLsb();
-        }
-        Iterator& operator++() {
-            int lsb = ComputeLsb();
-            m_val >>= lsb + 1;
-            m_bit += lsb + 1;
-            m_has_lsb = false;
-            return *this;
-        }
-        Iterator operator++(int _) {
-            Iterator other(*this);
-            ++*this;
-            return other;
-        }
-        bool operator==(Iterator other) const {
-            return m_val == other.m_val;
-        }
-        bool operator!=(Iterator other) const {
-            return m_val != other.m_val;
-        }
+    constexpr void ClearBit(size_t i) {
+        this->words[i / FlagsPerWord] &= ~GetBitMask(i % FlagsPerWord);
+    }
 
-    private:
-        int ComputeLsb() {
-            if (!m_has_lsb) {
-                m_lsb = LeastSignificantSetBit(m_val);
-                m_has_lsb = true;
+    constexpr size_t CountLeadingZero() const {
+        for (size_t i = 0; i < NumWords; i++) {
+            if (this->words[i]) {
+                return FlagsPerWord * i + CountLeadingZeroImpl(this->words[i]);
             }
-            return m_lsb;
         }
-        IntTy m_val;
-        int m_bit;
-        int m_lsb = -1;
-        bool m_has_lsb = false;
-    };
-
-    BitSet() : m_val(0) {}
-    explicit BitSet(IntTy val) : m_val(val) {}
-    BitSet(std::initializer_list<int> init) {
-        m_val = 0;
-        for (int bit : init)
-            m_val |= (IntTy)1 << bit;
+        return FlagsPerWord * NumWords;
     }
 
-    static BitSet AllTrue(size_t count) {
-        return BitSet(count == sizeof(IntTy) * 8 ? ~(IntTy)0 : (((IntTy)1 << count) - 1));
+    constexpr size_t GetNextSet(size_t n) const {
+        for (size_t i = (n + 1) / FlagsPerWord; i < NumWords; i++) {
+            Storage word = this->words[i];
+            if (!IsAligned(n + 1, FlagsPerWord)) {
+                word &= GetBitMask(n % FlagsPerWord) - 1;
+            }
+            if (word) {
+                return FlagsPerWord * i + CountLeadingZeroImpl(word);
+            }
+        }
+        return FlagsPerWord * NumWords;
     }
 
-    Ref operator[](size_t bit) {
-        return Ref(this, (IntTy)1 << bit);
-    }
-    const Ref operator[](size_t bit) const {
-        return (*const_cast<BitSet*>(this))[bit];
-    }
-    bool operator==(BitSet other) const {
-        return m_val == other.m_val;
-    }
-    bool operator!=(BitSet other) const {
-        return m_val != other.m_val;
-    }
-    bool operator<(BitSet other) const {
-        return m_val < other.m_val;
-    }
-    bool operator>(BitSet other) const {
-        return m_val > other.m_val;
-    }
-    BitSet operator|(BitSet other) const {
-        return BitSet(m_val | other.m_val);
-    }
-    BitSet operator&(BitSet other) const {
-        return BitSet(m_val & other.m_val);
-    }
-    BitSet operator^(BitSet other) const {
-        return BitSet(m_val ^ other.m_val);
-    }
-    BitSet operator~() const {
-        return BitSet(~m_val);
-    }
-    BitSet& operator|=(BitSet other) {
-        return *this = *this | other;
-    }
-    BitSet& operator&=(BitSet other) {
-        return *this = *this & other;
-    }
-    BitSet& operator^=(BitSet other) {
-        return *this = *this ^ other;
-    }
-    operator u32() = delete;
-    operator bool() {
-        return m_val != 0;
+private:
+    static_assert(std::is_unsigned_v<Storage>);
+    static_assert(sizeof(Storage) <= sizeof(u64));
+
+    static constexpr size_t FlagsPerWord = BitSize<Storage>();
+    static constexpr size_t NumWords = AlignUp(N, FlagsPerWord) / FlagsPerWord;
+
+    static constexpr auto CountLeadingZeroImpl(Storage word) {
+        return std::countl_zero(static_cast<unsigned long long>(word)) -
+               (BitSize<unsigned long long>() - FlagsPerWord);
     }
 
-    // Warning: Even though on modern CPUs this is a single fast instruction,
-    // Dolphin's official builds do not currently assume POPCNT support on x86,
-    // so slower explicit bit twiddling is generated.  Still should generally
-    // be faster than a loop.
-    unsigned int Count() const {
-        return CountSetBits(m_val);
+    static constexpr Storage GetBitMask(size_t bit) {
+        return Storage(1) << (FlagsPerWord - 1 - bit);
     }
 
-    Iterator begin() const {
-        return Iterator(m_val);
-    }
-    Iterator end() const {
-        return Iterator(0);
-    }
-
-    IntTy m_val;
+    std::array<Storage, NumWords> words{};
 };
 
-} // Common
+} // namespace impl
 
-typedef Common::BitSet<u8> BitSet8;
-typedef Common::BitSet<u16> BitSet16;
-typedef Common::BitSet<u32> BitSet32;
-typedef Common::BitSet<u64> BitSet64;
+template <size_t N>
+using BitSet8 = impl::BitSet<u8, N>;
+
+template <size_t N>
+using BitSet16 = impl::BitSet<u16, N>;
+
+template <size_t N>
+using BitSet32 = impl::BitSet<u32, N>;
+
+template <size_t N>
+using BitSet64 = impl::BitSet<u64, N>;
+
+} // namespace Common

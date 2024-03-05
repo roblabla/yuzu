@@ -1,69 +1,81 @@
-﻿// Copyright 2016 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2016 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
 #include <array>
-#include <functional>
 #include <memory>
-#include <string>
-#include <QKeyEvent>
-#include <QWidget>
-#include <boost/optional.hpp>
-#include "common/param_package.h"
-#include "core/settings.h"
-#include "ui_configure_input.h"
 
-class QPushButton;
+#include <QKeyEvent>
+#include <QList>
+#include <QWidget>
+
+namespace Core {
+class System;
+}
+
+class QCheckBox;
 class QString;
 class QTimer;
+
+class ConfigureInputAdvanced;
+class ConfigureInputPlayer;
+
+class InputProfiles;
+
+namespace InputCommon {
+class InputSubsystem;
+}
 
 namespace Ui {
 class ConfigureInput;
 }
 
+void OnDockedModeChanged(bool last_state, bool new_state, Core::System& system);
+
 class ConfigureInput : public QWidget {
     Q_OBJECT
 
 public:
-    explicit ConfigureInput(QWidget* parent = nullptr);
+    explicit ConfigureInput(Core::System& system_, QWidget* parent = nullptr);
+    ~ConfigureInput() override;
 
-    /// Save all button configurations to settings file
-    void applyConfiguration();
+    /// Initializes the input dialog with the given input subsystem.
+    void Initialize(InputCommon::InputSubsystem* input_subsystem_, std::size_t max_players = 8);
+
+    /// Save all button configurations to settings file.
+    void ApplyConfiguration();
+
+    QList<QWidget*> GetSubTabs() const;
 
 private:
-    std::unique_ptr<Ui::ConfigureInput> ui;
+    void changeEvent(QEvent* event) override;
+    void RetranslateUI();
+    void ClearAll();
 
-    std::unique_ptr<QTimer> timer;
-
-    /// This will be the the setting function when an input is awaiting configuration.
-    boost::optional<std::function<void(int)>> key_setter;
-
-    std::array<Common::ParamPackage, Settings::NativeButton::NumButtons> buttons_param;
-    std::array<Common::ParamPackage, Settings::NativeAnalog::NumAnalogs> analogs_param;
-
-    static constexpr int ANALOG_SUB_BUTTONS_NUM = 5;
-
-    /// Each button input is represented by a QPushButton.
-    std::array<QPushButton*, Settings::NativeButton::NumButtons> button_map;
-
-    /// Each analog input is represented by five QPushButtons which represents up, down, left, right
-    /// and modifier
-    std::array<std::array<QPushButton*, ANALOG_SUB_BUTTONS_NUM>, Settings::NativeAnalog::NumAnalogs>
-        analog_map;
-
-    static const std::array<std::string, ANALOG_SUB_BUTTONS_NUM> analog_sub_buttons;
+    void UpdateDockedState(bool is_handheld);
+    void UpdateAllInputDevices();
+    void UpdateAllInputProfiles(std::size_t player_index);
+    // Enable preceding controllers or disable following ones
+    void PropagatePlayerNumberChanged(size_t player_index, bool checked,
+                                      bool reconnect_current = false);
 
     /// Load configuration settings.
-    void loadConfiguration();
-    /// Restore all buttons to their default values.
-    void restoreDefaults();
-    /// Update UI to reflect current configuration.
-    void updateButtonLabels();
+    void LoadConfiguration();
+    void LoadPlayerControllerIndices();
 
-    /// Called when the button was pressed.
-    void handleClick(QPushButton* button, std::function<void(int)> new_key_setter);
-    /// Handle key press events.
-    void keyPressEvent(QKeyEvent* event) override;
+    /// Restore all buttons to their default values.
+    void RestoreDefaults();
+
+    std::unique_ptr<Ui::ConfigureInput> ui;
+
+    std::unique_ptr<InputProfiles> profiles;
+
+    std::array<ConfigureInputPlayer*, 8> player_controllers;
+    std::array<QWidget*, 8> player_tabs;
+    // Checkboxes representing the "Connected Controllers".
+    std::array<QCheckBox*, 8> connected_controller_checkboxes;
+    ConfigureInputAdvanced* advanced;
+
+    Core::System& system;
 };

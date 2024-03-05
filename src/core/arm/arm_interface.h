@@ -1,139 +1,113 @@
-// Copyright 2014 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2014 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
 #include <array>
+#include <span>
+#include <string>
+#include <vector>
+
+#include "common/common_funcs.h"
 #include "common/common_types.h"
-#include "core/hle/kernel/vm_manager.h"
+#include "core/hardware_properties.h"
 
-/// Generic ARM11 CPU interface
-class ARM_Interface : NonCopyable {
+#include "core/hle/kernel/svc_types.h"
+
+namespace Common {
+struct PageTable;
+}
+
+namespace Kernel {
+enum class DebugWatchpointType : u8;
+struct DebugWatchpoint;
+class KThread;
+class KProcess;
+} // namespace Kernel
+
+namespace Core {
+using WatchpointArray = std::array<Kernel::DebugWatchpoint, Core::Hardware::NUM_WATCHPOINTS>;
+
+// NOTE: these values match the HaltReason enum in Dynarmic
+enum class HaltReason : u64 {
+    StepThread = 0x00000001,
+    DataAbort = 0x00000004,
+    BreakLoop = 0x02000000,
+    SupervisorCall = 0x04000000,
+    InstructionBreakpoint = 0x08000000,
+    PrefetchAbort = 0x20000000,
+};
+DECLARE_ENUM_FLAG_OPERATORS(HaltReason);
+
+enum class Architecture {
+    AArch64,
+    AArch32,
+};
+
+/// Generic ARMv8 CPU interface
+class ArmInterface {
 public:
-    virtual ~ARM_Interface() {}
+    YUZU_NON_COPYABLE(ArmInterface);
+    YUZU_NON_MOVEABLE(ArmInterface);
 
-    struct ThreadContext {
-        std::array<u64, 31> cpu_registers;
-        u64 sp;
-        u64 pc;
-        u64 cpsr;
-        std::array<u128, 32> fpu_registers;
-        u64 fpscr;
+    explicit ArmInterface(bool uses_wall_clock) : m_uses_wall_clock{uses_wall_clock} {}
+    virtual ~ArmInterface() = default;
 
-        // TODO(bunnei): Fix once we have proper support for tpidrro_el0, etc. in the JIT
-        VAddr tls_address;
-    };
+    // Perform any backend-specific initialization.
+    virtual void Initialize() {}
 
-    /**
-     * Runs the CPU for the given number of instructions
-     * @param num_instructions Number of instructions to run
-     */
-    void Run(int num_instructions) {
-        ExecuteInstructions(num_instructions);
-        this->num_instructions += num_instructions;
-    }
+    // Runs the CPU until an event happens.
+    virtual HaltReason RunThread(Kernel::KThread* thread) = 0;
 
-    /// Step CPU by one instruction
-    void Step() {
-        Run(1);
-    }
+    // Runs the CPU for one instruction or until an event happens.
+    virtual HaltReason StepThread(Kernel::KThread* thread) = 0;
 
-    virtual void MapBackingMemory(VAddr address, size_t size, u8* memory, Kernel::VMAPermission perms) {}
+    // Admits a backend-specific mechanism to lock the thread context.
+    virtual void LockThread(Kernel::KThread* thread) {}
+    virtual void UnlockThread(Kernel::KThread* thread) {}
 
-    /// Clear all instruction cache
+    // Clear the entire instruction cache for this CPU.
     virtual void ClearInstructionCache() = 0;
 
-    /// Notify CPU emulation that page tables have changed
-    virtual void PageTableChanged() = 0;
+    // Clear a range of the instruction cache for this CPU.
+    virtual void InvalidateCacheRange(u64 addr, std::size_t size) = 0;
 
-    /**
-     * Set the Program Counter to an address
-     * @param addr Address to set PC to
-     */
-    virtual void SetPC(u64 addr) = 0;
+    // Get the current architecture.
+    // This returns AArch64 when PSTATE.nRW == 0 and AArch32 when PSTATE.nRW == 1.
+    virtual Architecture GetArchitecture() const = 0;
 
-    /*
-     * Get the current Program Counter
-     * @return Returns current PC
-     */
-    virtual u64 GetPC() const = 0;
+    // Context accessors.
+    // These should not be called if the CPU is running.
+    virtual void GetContext(Kernel::Svc::ThreadContext& ctx) const = 0;
+    virtual void SetContext(const Kernel::Svc::ThreadContext& ctx) = 0;
+    virtual void SetTpidrroEl0(u64 value) = 0;
 
-    /**
-     * Get an ARM register
-     * @param index Register index
-     * @return Returns the value in the register
-     */
-    virtual u64 GetReg(int index) const = 0;
+    virtual void GetSvcArguments(std::span<uint64_t, 8> args) const = 0;
+    virtual void SetSvcArguments(std::span<const uint64_t, 8> args) = 0;
+    virtual u32 GetSvcNumber() const = 0;
 
-    /**
-     * Set an ARM register
-     * @param index Register index
-     * @param value Value to set register to
-     */
-    virtual void SetReg(int index, u64 value) = 0;
-
-    virtual u128 GetExtReg(int index) const = 0;
-
-    virtual void SetExtReg(int index, u128 value) = 0;
-
-    /**
-     * Gets the value of a VFP register
-     * @param index Register index (0-31)
-     * @return Returns the value in the register
-     */
-    virtual u32 GetVFPReg(int index) const = 0;
-
-    /**
-     * Sets a VFP register to the given value
-     * @param index Register index (0-31)
-     * @param value Value to set register to
-     */
-    virtual void SetVFPReg(int index, u32 value) = 0;
-
-    /**
-     * Get the current CPSR register
-     * @return Returns the value of the CPSR register
-     */
-    virtual u32 GetCPSR() const = 0;
-
-    /**
-     * Set the current CPSR register
-     * @param cpsr Value to set CPSR to
-     */
-    virtual void SetCPSR(u32 cpsr) = 0;
-
-    virtual VAddr GetTlsAddress() const = 0;
-
-    virtual void SetTlsAddress(VAddr address) = 0;
-
-    /**
-     * Saves the current CPU context
-     * @param ctx Thread context to save
-     */
-    virtual void SaveContext(ThreadContext& ctx) = 0;
-
-    /**
-     * Loads a CPU context
-     * @param ctx Thread context to load
-     */
-    virtual void LoadContext(const ThreadContext& ctx) = 0;
-
-    /// Prepare core for thread reschedule (if needed to correctly handle state)
-    virtual void PrepareReschedule() = 0;
-
-    /// Getter for num_instructions
-    u64 GetNumInstructions() const {
-        return num_instructions;
+    void SetWatchpointArray(const WatchpointArray* watchpoints) {
+        m_watchpoints = watchpoints;
     }
 
-protected:
-    /**
-     * Executes the given number of instructions
-     * @param num_instructions Number of instructions to executes
-     */
-    virtual void ExecuteInstructions(int num_instructions) = 0;
+    // Signal an interrupt for execution to halt as soon as possible.
+    // It is safe to call this if the CPU is not running.
+    virtual void SignalInterrupt(Kernel::KThread* thread) = 0;
 
-private:
-    u64 num_instructions = 0; ///< Number of instructions executed
+    // Stack trace generation.
+    void LogBacktrace(Kernel::KProcess* process) const;
+
+    // Debug functionality.
+    virtual const Kernel::DebugWatchpoint* HaltedWatchpoint() const = 0;
+    virtual void RewindBreakpointInstruction() = 0;
+
+protected:
+    const Kernel::DebugWatchpoint* MatchingWatchpoint(
+        u64 addr, u64 size, Kernel::DebugWatchpointType access_type) const;
+
+protected:
+    const WatchpointArray* m_watchpoints{};
+    bool m_uses_wall_clock{};
 };
+
+} // namespace Core
