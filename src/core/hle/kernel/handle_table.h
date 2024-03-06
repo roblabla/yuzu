@@ -7,17 +7,16 @@
 #include <array>
 #include <cstddef>
 #include "common/common_types.h"
-#include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/object.h"
 #include "core/hle/result.h"
 
 namespace Kernel {
 
 enum KernelHandle : Handle {
+    InvalidHandle = 0,
     CurrentThread = 0xFFFF8000,
     CurrentProcess = 0xFFFF8001,
 };
-
-class Session;
 
 /**
  * This class allows the creation of Handles, which are references to objects that can be tested
@@ -44,12 +43,16 @@ class Session;
  */
 class HandleTable final : NonCopyable {
 public:
+    /// This is the maximum limit of handles allowed per process in Horizon
+    static constexpr std::size_t MAX_COUNT = 1024;
+
     HandleTable();
+    ~HandleTable();
 
     /**
      * Allocates a handle for the given object.
      * @return The created Handle or one of the following errors:
-     *           - `ERR_OUT_OF_HANDLES`: the maximum number of handles has been exceeded.
+     *           - `ERR_HANDLE_TABLE_FULL`: the maximum number of handles has been exceeded.
      */
     ResultVal<Handle> Create(SharedPtr<Object> obj);
 
@@ -60,11 +63,6 @@ public:
      *           - Any errors returned by `Create()`.
      */
     ResultVal<Handle> Duplicate(Handle handle);
-
-    /**
-     * Convert all handles of the specified Session to the specified Domain.
-     */
-    void ConvertSessionToDomain(const Session& session, SharedPtr<Object> domain);
 
     /**
      * Closes a handle, removing it from the table and decreasing the object's ref-count.
@@ -96,19 +94,6 @@ public:
     void Clear();
 
 private:
-    /**
-     * This is the maximum limit of handles allowed per process in CTR-OS. It can be further
-     * reduced by ExHeader values, but this is not emulated here.
-     */
-    static const size_t MAX_COUNT = 4096;
-
-    static u16 GetSlot(Handle handle) {
-        return handle >> 15;
-    }
-    static u16 GetGeneration(Handle handle) {
-        return handle & 0x7FFF;
-    }
-
     /// Stores the Object referenced by the handle or null if the slot is empty.
     std::array<SharedPtr<Object>, MAX_COUNT> objects;
 
@@ -128,6 +113,4 @@ private:
     u16 next_free_slot;
 };
 
-extern HandleTable g_handle_table;
-
-} // namespace
+} // namespace Kernel

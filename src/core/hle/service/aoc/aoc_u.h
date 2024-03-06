@@ -6,17 +6,29 @@
 
 #include "core/hle/service/service.h"
 
-namespace Service {
-namespace AOC {
+namespace Kernel {
+class WritableEvent;
+}
+
+namespace Service::AOC {
 
 class AOC_U final : public ServiceFramework<AOC_U> {
 public:
     AOC_U();
-    ~AOC_U() = default;
+    ~AOC_U() override;
+
+private:
+    void CountAddOnContent(Kernel::HLERequestContext& ctx);
+    void ListAddOnContent(Kernel::HLERequestContext& ctx);
+    void GetAddOnContentBaseId(Kernel::HLERequestContext& ctx);
+    void PrepareAddOnContent(Kernel::HLERequestContext& ctx);
+    void GetAddOnContentListChangedEvent(Kernel::HLERequestContext& ctx);
+
+    std::vector<u64> add_on_content;
+    Kernel::EventPair aoc_change_event;
 };
 
 /// Registers all AOC services with the specified service manager.
 void InstallInterfaces(SM::ServiceManager& service_manager);
 
-} // namespace AOC
-} // namespace Service
+} // namespace Service::AOC

@@ -4,12 +4,12 @@
 
 #pragma once
 
-#if !defined(ARCHITECTURE_x86_64) && !defined(_M_ARM)
+#include <string>
+
+#if !defined(ARCHITECTURE_x86_64)
 #include <cstdlib> // for exit
 #endif
 #include "common/common_types.h"
-
-#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
 /// Textually concatenates two tokens. The double-expansion is required by the C preprocessor.
 #define CONCAT2(x, y) DO_CONCAT2(x, y)
@@ -32,52 +32,11 @@
 
 #ifdef ARCHITECTURE_x86_64
 #define Crash() __asm__ __volatile__("int $3")
-#elif defined(_M_ARM)
-#define Crash() __asm__ __volatile__("trap")
 #else
 #define Crash() exit(1)
 #endif
 
-// GCC 4.8 defines all the rotate functions now
-// Small issue with GCC's lrotl/lrotr intrinsics is they are still 32bit while we require 64bit
-#ifdef _rotl
-#define rotl _rotl
-#else
-inline u32 rotl(u32 x, int shift) {
-    shift &= 31;
-    if (!shift)
-        return x;
-    return (x << shift) | (x >> (32 - shift));
-}
-#endif
-
-#ifdef _rotr
-#define rotr _rotr
-#else
-inline u32 rotr(u32 x, int shift) {
-    shift &= 31;
-    if (!shift)
-        return x;
-    return (x >> shift) | (x << (32 - shift));
-}
-#endif
-
-inline u64 _rotl64(u64 x, unsigned int shift) {
-    unsigned int n = shift % 64;
-    return (x << n) | (x >> (64 - n));
-}
-
-inline u64 _rotr64(u64 x, unsigned int shift) {
-    unsigned int n = shift % 64;
-    return (x >> n) | (x << (64 - n));
-}
-
 #else // _MSC_VER
-
-#if (_MSC_VER < 1900)
-// Function Cross-Compatibility
-#define snprintf _snprintf
-#endif
 
 // Locale Cross-Compatibility
 #define locale_t _locale_t
@@ -87,17 +46,13 @@ __declspec(dllimport) void __stdcall DebugBreak(void);
 }
 #define Crash() DebugBreak()
 
-// cstdlib provides these on MSVC
-#define rotr _rotr
-#define rotl _rotl
-
 #endif // _MSC_VER ndef
 
 // Generic function to get last error message.
 // Call directly after the command or use the error num.
 // This function might change the error code.
 // Defined in Misc.cpp.
-const char* GetLastErrorMsg();
+std::string GetLastErrorMsg();
 
 namespace Common {
 

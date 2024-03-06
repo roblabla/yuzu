@@ -3,14 +3,17 @@
 // Refer to the license.txt file included.
 
 #include "core/hle/service/pctl/pctl.h"
-#include "core/hle/service/pctl/pctl_a.h"
 
-namespace Service {
-namespace PCTL {
+namespace Service::PCTL {
 
-void InstallInterfaces(SM::ServiceManager& service_manager) {
-    std::make_shared<PCTL_A>()->InstallAsService(service_manager);
+PCTL::PCTL(std::shared_ptr<Module> module, const char* name)
+    : Module::Interface(std::move(module), name) {
+    static const FunctionInfo functions[] = {
+        {0, &PCTL::CreateService, "CreateService"},
+        {1, &PCTL::CreateServiceWithoutInitialize, "CreateServiceWithoutInitialize"},
+    };
+    RegisterHandlers(functions);
 }
 
-} // namespace PCTL
-} // namespace Service
+PCTL::~PCTL() = default;
+} // namespace Service::PCTL

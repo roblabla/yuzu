@@ -6,13 +6,14 @@
 
 #include <string>
 #include "common/common_types.h"
-#include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/object.h"
 #include "core/hle/result.h"
 
 namespace Kernel {
 
-class ServerPort;
 class ClientSession;
+class KernelCore;
+class ServerPort;
 
 class ClientPort final : public Object {
 public:
@@ -29,6 +30,8 @@ public:
         return HANDLE_TYPE;
     }
 
+    SharedPtr<ServerPort> GetServerPort() const;
+
     /**
      * Creates a new Session pair, adds the created ServerSession to the associated ServerPort's
      * list of pending sessions, and signals the ServerPort, causing any threads
@@ -37,14 +40,20 @@ public:
      */
     ResultVal<SharedPtr<ClientSession>> Connect();
 
-    SharedPtr<ServerPort> server_port; ///< ServerPort associated with this client port.
-    u32 max_sessions;    ///< Maximum number of simultaneous sessions the port can have
-    u32 active_sessions; ///< Number of currently open sessions to this port
-    std::string name;    ///< Name of client port (optional)
+    /**
+     * Signifies that a previously active connection has been closed,
+     * decreasing the total number of active connections to this port.
+     */
+    void ConnectionClosed();
 
 private:
-    ClientPort();
+    explicit ClientPort(KernelCore& kernel);
     ~ClientPort() override;
+
+    SharedPtr<ServerPort> server_port; ///< ServerPort associated with this client port.
+    u32 max_sessions = 0;    ///< Maximum number of simultaneous sessions the port can have
+    u32 active_sessions = 0; ///< Number of currently open sessions to this port
+    std::string name;        ///< Name of client port (optional)
 };
 
-} // namespace
+} // namespace Kernel

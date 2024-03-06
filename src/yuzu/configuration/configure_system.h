@@ -5,6 +5,8 @@
 #pragma once
 
 #include <memory>
+
+#include <QList>
 #include <QWidget>
 
 namespace Ui {
@@ -16,23 +18,22 @@ class ConfigureSystem : public QWidget {
 
 public:
     explicit ConfigureSystem(QWidget* parent = nullptr);
-    ~ConfigureSystem();
+    ~ConfigureSystem() override;
 
     void applyConfiguration();
     void setConfiguration();
 
-public slots:
-    void updateBirthdayComboBox(int birthmonth_index);
-    void refreshConsoleID();
-
 private:
     void ReadSystemSettings();
 
-    std::unique_ptr<Ui::ConfigureSystem> ui;
-    bool enabled;
+    void UpdateBirthdayComboBox(int birthmonth_index);
+    void RefreshConsoleID();
 
-    std::u16string username;
-    int birthmonth, birthday;
-    int language_index;
-    int sound_index;
+    std::unique_ptr<Ui::ConfigureSystem> ui;
+    bool enabled = false;
+
+    int birthmonth = 0;
+    int birthday = 0;
+    int language_index = 0;
+    int sound_index = 0;
 };

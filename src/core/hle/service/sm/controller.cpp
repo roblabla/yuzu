@@ -2,42 +2,52 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include "common/assert.h"
 #include "common/logging/log.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/domain.h"
+#include "core/hle/kernel/client_session.h"
+#include "core/hle/kernel/server_session.h"
+#include "core/hle/kernel/session.h"
 #include "core/hle/service/sm/controller.h"
 
-namespace Service {
-namespace SM {
+namespace Service::SM {
 
 void Controller::ConvertSessionToDomain(Kernel::HLERequestContext& ctx) {
-    auto domain = Kernel::Domain::CreateFromSession(*ctx.ServerSession()->parent).Unwrap();
+    ASSERT_MSG(ctx.Session()->IsSession(), "Session is already a domain");
+    LOG_DEBUG(Service, "called, server_session={}", ctx.Session()->GetObjectId());
+    ctx.Session()->ConvertToDomain();
 
-    IPC::RequestBuilder rb{ctx, 3};
+    IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(RESULT_SUCCESS);
-    rb.Push(static_cast<u32>(domain->request_handlers.size()));
-
-    LOG_DEBUG(Service, "called, domain=%d", domain->GetObjectId());
+    rb.Push<u32>(1); // Converted sessions start with 1 request handler
 }
 
 void Controller::DuplicateSession(Kernel::HLERequestContext& ctx) {
-    IPC::RequestBuilder rb{ctx, 2, 0, 1};
-    rb.Push(RESULT_SUCCESS);
-    // TODO(Subv): Check if this is correct
-    if (ctx.IsDomain())
-        rb.PushMoveObjects(ctx.Domain());
-    else
-        rb.PushMoveObjects(ctx.ServerSession());
-
+    // TODO(bunnei): This is just creating a new handle to the same Session. I assume this is wrong
+    // and that we probably want to actually make an entirely new Session, but we still need to
+    // verify this on hardware.
     LOG_DEBUG(Service, "called");
+
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1, IPC::ResponseBuilder::Flags::AlwaysMoveHandles};
+    rb.Push(RESULT_SUCCESS);
+    Kernel::SharedPtr<Kernel::ClientSession> session{ctx.Session()->parent->client};
+    rb.PushMoveObjects(session);
+
+    LOG_DEBUG(Service, "session={}", session->GetObjectId());
+}
+
+void Controller::DuplicateSessionEx(Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service, "(STUBBED) called, using DuplicateSession");
+
+    DuplicateSession(ctx);
 }
 
 void Controller::QueryPointerBufferSize(Kernel::HLERequestContext& ctx) {
-    IPC::RequestBuilder rb{ctx, 3};
-    rb.Push(RESULT_SUCCESS);
-    rb.Push<u32>(0x500);
-
     LOG_WARNING(Service, "(STUBBED) called");
+
+    IPC::ResponseBuilder rb{ctx, 3};
+    rb.Push(RESULT_SUCCESS);
+    rb.Push<u16>(0x500);
 }
 
 Controller::Controller() : ServiceFramework("IpcController") {
@@ -46,10 +56,11 @@ Controller::Controller() : ServiceFramework("IpcController") {
         {0x00000001, nullptr, "ConvertDomainToSession"},
         {0x00000002, &Controller::DuplicateSession, "DuplicateSession"},
         {0x00000003, &Controller::QueryPointerBufferSize, "QueryPointerBufferSize"},
-        {0x00000004, nullptr, "DuplicateSessionEx"},
+        {0x00000004, &Controller::DuplicateSessionEx, "DuplicateSessionEx"},
     };
     RegisterHandlers(functions);
 }
 
-} // namespace SM
-} // namespace Service
+Controller::~Controller() = default;
+
+} // namespace Service::SM

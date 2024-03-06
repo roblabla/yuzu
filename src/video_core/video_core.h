@@ -4,31 +4,24 @@
 
 #pragma once
 
-#include <atomic>
 #include <memory>
 
+namespace Core::Frontend {
 class EmuWindow;
-class RendererBase;
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// Video Core namespace
+}
 
 namespace VideoCore {
 
-extern std::unique_ptr<RendererBase> g_renderer; ///< Renderer plugin
-extern EmuWindow* g_emu_window;                  ///< Emu window
+class RendererBase;
 
-// TODO: Wrap these in a user settings struct along with any other graphics settings (often set from
-// qt ui)
-extern std::atomic<bool> g_toggle_framelimit_enabled;
+/**
+ * Creates a renderer instance.
+ *
+ * @note The returned renderer instance is simply allocated. Its Init()
+ *       function still needs to be called to fully complete its setup.
+ */
+std::unique_ptr<RendererBase> CreateRenderer(Core::Frontend::EmuWindow& emu_window);
 
-/// Start the video core
-void Start();
+u16 GetResolutionScaleFactor(const RendererBase& renderer);
 
-/// Initialize the video core
-bool Init(EmuWindow* emu_window);
-
-/// Shutdown the video core
-void Shutdown();
-
-} // namespace
+} // namespace VideoCore

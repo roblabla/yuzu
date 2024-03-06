@@ -13,23 +13,40 @@ ConfigureGeneral::ConfigureGeneral(QWidget* parent)
 
     ui->setupUi(this);
 
+    for (const auto& theme : UISettings::themes) {
+        ui->theme_combobox->addItem(theme.first, theme.second);
+    }
+
     this->setConfiguration();
 
-    ui->cpu_core_combobox->setEnabled(!Core::System::GetInstance().IsPoweredOn());
+    connect(ui->toggle_deepscan, &QCheckBox::stateChanged, this,
+            [] { UISettings::values.is_game_list_reload_pending.exchange(true); });
+
+    ui->use_cpu_jit->setEnabled(!Core::System::GetInstance().IsPoweredOn());
 }
 
-ConfigureGeneral::~ConfigureGeneral() {}
+ConfigureGeneral::~ConfigureGeneral() = default;
 
 void ConfigureGeneral::setConfiguration() {
     ui->toggle_deepscan->setChecked(UISettings::values.gamedir_deepscan);
     ui->toggle_check_exit->setChecked(UISettings::values.confirm_before_closing);
-    ui->cpu_core_combobox->setCurrentIndex(static_cast<int>(Settings::values.cpu_core));
+    ui->toggle_user_on_boot->setChecked(UISettings::values.select_user_on_boot);
+    ui->theme_combobox->setCurrentIndex(ui->theme_combobox->findData(UISettings::values.theme));
+    ui->use_cpu_jit->setChecked(Settings::values.use_cpu_jit);
+    ui->enable_nfc->setChecked(Settings::values.enable_nfc);
+}
+
+void ConfigureGeneral::PopulateHotkeyList(const HotkeyRegistry& registry) {
+    ui->widget->Populate(registry);
 }
 
 void ConfigureGeneral::applyConfiguration() {
     UISettings::values.gamedir_deepscan = ui->toggle_deepscan->isChecked();
     UISettings::values.confirm_before_closing = ui->toggle_check_exit->isChecked();
-    Settings::values.cpu_core =
-        static_cast<Settings::CpuCore>(ui->cpu_core_combobox->currentIndex());
-    Settings::Apply();
+    UISettings::values.select_user_on_boot = ui->toggle_user_on_boot->isChecked();
+    UISettings::values.theme =
+        ui->theme_combobox->itemData(ui->theme_combobox->currentIndex()).toString();
+
+    Settings::values.use_cpu_jit = ui->use_cpu_jit->isChecked();
+    Settings::values.enable_nfc = ui->enable_nfc->isChecked();
 }

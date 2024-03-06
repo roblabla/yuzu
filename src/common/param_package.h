@@ -28,10 +28,12 @@ public:
     std::string Get(const std::string& key, const std::string& default_value) const;
     int Get(const std::string& key, int default_value) const;
     float Get(const std::string& key, float default_value) const;
-    void Set(const std::string& key, const std::string& value);
+    void Set(const std::string& key, std::string value);
     void Set(const std::string& key, int value);
     void Set(const std::string& key, float value);
     bool Has(const std::string& key) const;
+    void Erase(const std::string& key);
+    void Clear();
 
 private:
     DataType data;

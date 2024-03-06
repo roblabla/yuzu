@@ -5,11 +5,11 @@
 #pragma once
 
 #include <vector>
+#include "common/bit_field.h"
 #include "common/common_types.h"
+#include "common/swap.h"
 
-namespace Service {
-namespace NVDRV {
-namespace Devices {
+namespace Service::Nvidia::Devices {
 
 /// Represents an abstract nvidia device node. It is to be subclassed by concrete device nodes to
 /// implement the ioctl interface.
@@ -17,6 +17,14 @@ class nvdevice {
 public:
     nvdevice() = default;
     virtual ~nvdevice() = default;
+    union Ioctl {
+        u32_le raw;
+        BitField<0, 8, u32_le> cmd;
+        BitField<8, 8, u32_le> group;
+        BitField<16, 14, u32_le> length;
+        BitField<30, 1, u32_le> is_in;
+        BitField<31, 1, u32_le> is_out;
+    };
 
     /**
      * Handles an ioctl request.
@@ -25,9 +33,7 @@ public:
      * @param output A buffer where the output data will be written to.
      * @returns The result code of the ioctl.
      */
-    virtual u32 ioctl(u32 command, const std::vector<u8>& input, std::vector<u8>& output) = 0;
+    virtual u32 ioctl(Ioctl command, const std::vector<u8>& input, std::vector<u8>& output) = 0;
 };
 
-} // namespace Devices
-} // namespace NVDRV
-} // namespace Service
+} // namespace Service::Nvidia::Devices

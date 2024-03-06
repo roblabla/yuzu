@@ -16,7 +16,7 @@ struct ThreadQueueList {
     //               (dynamically resizable) circular buffers to remove their overhead when
     //               inserting and popping.
 
-    typedef unsigned int Priority;
+    using Priority = unsigned int;
 
     // Number of priority levels. (Valid levels are [0..NUM_QUEUES).)
     static const Priority NUM_QUEUES = N;
@@ -26,9 +26,9 @@ struct ThreadQueueList {
     }
 
     // Only for debugging, returns priority level.
-    Priority contains(const T& uid) {
+    Priority contains(const T& uid) const {
         for (Priority i = 0; i < NUM_QUEUES; ++i) {
-            Queue& cur = queues[i];
+            const Queue& cur = queues[i];
             if (std::find(cur.data.cbegin(), cur.data.cend(), uid) != cur.data.cend()) {
                 return i;
             }
@@ -37,11 +37,27 @@ struct ThreadQueueList {
         return -1;
     }
 
-    T get_first() {
-        Queue* cur = first;
+    T get_first() const {
+        const Queue* cur = first;
         while (cur != nullptr) {
             if (!cur->data.empty()) {
                 return cur->data.front();
+            }
+            cur = cur->next_nonempty;
+        }
+
+        return T();
+    }
+
+    template <typename UnaryPredicate>
+    T get_first_filter(UnaryPredicate filter) const {
+        const Queue* cur = first;
+        while (cur != nullptr) {
+            if (!cur->data.empty()) {
+                for (const auto& item : cur->data) {
+                    if (filter(item))
+                        return item;
+                }
             }
             cur = cur->next_nonempty;
         }
@@ -158,4 +174,4 @@ private:
     std::array<Queue, NUM_QUEUES> queues;
 };
 
-} // namespace
+} // namespace Common

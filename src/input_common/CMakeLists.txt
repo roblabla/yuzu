@@ -1,25 +1,18 @@
-set(SRCS
-            analog_from_button.cpp
-            keyboard.cpp
-            main.cpp
-            motion_emu.cpp
-            )
+add_library(input_common STATIC
+    analog_from_button.cpp
+    analog_from_button.h
+    keyboard.cpp
+    keyboard.h
+    main.cpp
+    main.h
+    motion_emu.cpp
+    motion_emu.h
 
-set(HEADERS
-            analog_from_button.h
-            keyboard.h
-            main.h
-            motion_emu.h
-            )
+    $<$<BOOL:${SDL2_FOUND}>:sdl/sdl.cpp sdl/sdl.h>
+)
 
-if(SDL2_FOUND)
-    set(SRCS ${SRCS} sdl/sdl.cpp)
-    set(HEADERS ${HEADERS} sdl/sdl.h)
-endif()
+create_target_directory_groups(input_common)
 
-create_directory_groups(${SRCS} ${HEADERS})
-
-add_library(input_common STATIC ${SRCS} ${HEADERS})
 target_link_libraries(input_common PUBLIC core PRIVATE common)
 
 if(SDL2_FOUND)

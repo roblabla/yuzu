@@ -6,7 +6,7 @@
 
 #include <array>
 #include <cstddef>
-#include <string>
+#include <string_view>
 #include "common/logging/log.h"
 
 namespace Log {
@@ -19,7 +19,7 @@ namespace Log {
 class Filter {
 public:
     /// Initializes the filter with all classes having `default_level` as the minimum level.
-    Filter(Level default_level);
+    explicit Filter(Level default_level = Level::Info);
 
     /// Resets the filter so that all classes have `level` as the minimum displayed level.
     void ResetAll(Level level);
@@ -40,14 +40,15 @@ public:
      *  - `Service:Info` -- Sets the level of Service to Info.
      *  - `Service.FS:Trace` -- Sets the level of the Service.FS class to Trace.
      */
-    void ParseFilterString(const std::string& filter_str);
-    bool ParseFilterRule(const std::string::const_iterator start,
-                         const std::string::const_iterator end);
+    void ParseFilterString(std::string_view filter_view);
 
     /// Matches class/level combination against the filter, returning true if it passed.
     bool CheckMessage(Class log_class, Level level) const;
 
+    /// Returns true if any logging classes are set to debug
+    bool IsDebug() const;
+
 private:
-    std::array<Level, (size_t)Class::Count> class_levels;
+    std::array<Level, static_cast<std::size_t>(Class::Count)> class_levels;
 };
-}
+} // namespace Log

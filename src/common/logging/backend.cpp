@@ -3,16 +3,154 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
-#include <array>
-#include <cstdio>
+#include <atomic>
+#include <chrono>
+#include <climits>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <vector>
+#ifdef _WIN32
+#include <share.h>   // For _SH_DENYWR
+#include <windows.h> // For OutputDebugStringW
+#else
+#define _SH_DENYWR 0
+#endif
 #include "common/assert.h"
-#include "common/common_funcs.h" // snprintf compatibility define
 #include "common/logging/backend.h"
-#include "common/logging/filter.h"
 #include "common/logging/log.h"
 #include "common/logging/text_formatter.h"
+#include "common/string_util.h"
+#include "common/threadsafe_queue.h"
 
 namespace Log {
+
+/**
+ * Static state as a singleton.
+ */
+class Impl {
+public:
+    static Impl& Instance() {
+        static Impl backend;
+        return backend;
+    }
+
+    Impl(Impl const&) = delete;
+    const Impl& operator=(Impl const&) = delete;
+
+    void PushEntry(Entry e) {
+        std::lock_guard<std::mutex> lock(message_mutex);
+        message_queue.Push(std::move(e));
+        message_cv.notify_one();
+    }
+
+    void AddBackend(std::unique_ptr<Backend> backend) {
+        std::lock_guard<std::mutex> lock(writing_mutex);
+        backends.push_back(std::move(backend));
+    }
+
+    void RemoveBackend(std::string_view backend_name) {
+        std::lock_guard<std::mutex> lock(writing_mutex);
+        const auto it =
+            std::remove_if(backends.begin(), backends.end(),
+                           [&backend_name](const auto& i) { return backend_name == i->GetName(); });
+        backends.erase(it, backends.end());
+    }
+
+    const Filter& GetGlobalFilter() const {
+        return filter;
+    }
+
+    void SetGlobalFilter(const Filter& f) {
+        filter = f;
+    }
+
+    Backend* GetBackend(std::string_view backend_name) {
+        const auto it =
+            std::find_if(backends.begin(), backends.end(),
+                         [&backend_name](const auto& i) { return backend_name == i->GetName(); });
+        if (it == backends.end())
+            return nullptr;
+        return it->get();
+    }
+
+private:
+    Impl() {
+        backend_thread = std::thread([&] {
+            Entry entry;
+            auto write_logs = [&](Entry& e) {
+                std::lock_guard<std::mutex> lock(writing_mutex);
+                for (const auto& backend : backends) {
+                    backend->Write(e);
+                }
+            };
+            while (true) {
+                {
+                    std::unique_lock<std::mutex> lock(message_mutex);
+                    message_cv.wait(lock, [&] { return !running || message_queue.Pop(entry); });
+                }
+                if (!running) {
+                    break;
+                }
+                write_logs(entry);
+            }
+            // Drain the logging queue. Only writes out up to MAX_LOGS_TO_WRITE to prevent a case
+            // where a system is repeatedly spamming logs even on close.
+            const int MAX_LOGS_TO_WRITE = filter.IsDebug() ? INT_MAX : 100;
+            int logs_written = 0;
+            while (logs_written++ < MAX_LOGS_TO_WRITE && message_queue.Pop(entry)) {
+                write_logs(entry);
+            }
+        });
+    }
+
+    ~Impl() {
+        running = false;
+        message_cv.notify_one();
+        backend_thread.join();
+    }
+
+    std::atomic_bool running{true};
+    std::mutex message_mutex, writing_mutex;
+    std::condition_variable message_cv;
+    std::thread backend_thread;
+    std::vector<std::unique_ptr<Backend>> backends;
+    Common::MPSCQueue<Log::Entry> message_queue;
+    Filter filter;
+};
+
+void ConsoleBackend::Write(const Entry& entry) {
+    PrintMessage(entry);
+}
+
+void ColorConsoleBackend::Write(const Entry& entry) {
+    PrintColoredMessage(entry);
+}
+
+// _SH_DENYWR allows read only access to the file for other programs.
+// It is #defined to 0 on other platforms
+FileBackend::FileBackend(const std::string& filename)
+    : file(filename, "w", _SH_DENYWR), bytes_written(0) {}
+
+void FileBackend::Write(const Entry& entry) {
+    // prevent logs from going over the maximum size (in case its spamming and the user doesn't
+    // know)
+    constexpr std::size_t MAX_BYTES_WRITTEN = 50 * 1024L * 1024L;
+    if (!file.IsOpen() || bytes_written > MAX_BYTES_WRITTEN) {
+        return;
+    }
+    bytes_written += file.WriteString(FormatLogMessage(entry).append(1, '\n'));
+    if (entry.log_level >= Level::Error) {
+        file.Flush();
+    }
+}
+
+void DebuggerBackend::Write(const Entry& entry) {
+#ifdef _WIN32
+    ::OutputDebugStringW(Common::UTF8ToUTF16W(FormatLogMessage(entry).append(1, '\n')).c_str());
+#endif
+}
 
 /// Macro listing all log classes. Code should define CLS and SUB as desired before invoking this.
 #define ALL_LOG_CLASSES()                                                                          \
@@ -32,17 +170,64 @@ namespace Log {
     CLS(Kernel)                                                                                    \
     SUB(Kernel, SVC)                                                                               \
     CLS(Service)                                                                                   \
-    SUB(Service, SM)                                                                               \
+    SUB(Service, ACC)                                                                              \
+    SUB(Service, Audio)                                                                            \
+    SUB(Service, AM)                                                                               \
+    SUB(Service, AOC)                                                                              \
+    SUB(Service, APM)                                                                              \
+    SUB(Service, ARP)                                                                              \
+    SUB(Service, BCAT)                                                                             \
+    SUB(Service, BPC)                                                                              \
+    SUB(Service, BTDRV)                                                                            \
+    SUB(Service, BTM)                                                                              \
+    SUB(Service, Capture)                                                                          \
+    SUB(Service, ERPT)                                                                             \
+    SUB(Service, ETicket)                                                                          \
+    SUB(Service, EUPLD)                                                                            \
+    SUB(Service, Fatal)                                                                            \
+    SUB(Service, FGM)                                                                              \
+    SUB(Service, Friend)                                                                           \
     SUB(Service, FS)                                                                               \
-    SUB(Service, GSP)                                                                              \
-    SUB(Service, CFG)                                                                              \
-    SUB(Service, DSP)                                                                              \
+    SUB(Service, GRC)                                                                              \
     SUB(Service, HID)                                                                              \
+    SUB(Service, IRS)                                                                              \
+    SUB(Service, LBL)                                                                              \
+    SUB(Service, LDN)                                                                              \
+    SUB(Service, LDR)                                                                              \
+    SUB(Service, LM)                                                                               \
+    SUB(Service, Migration)                                                                        \
+    SUB(Service, Mii)                                                                              \
+    SUB(Service, MM)                                                                               \
+    SUB(Service, NCM)                                                                              \
+    SUB(Service, NFC)                                                                              \
+    SUB(Service, NFP)                                                                              \
+    SUB(Service, NIFM)                                                                             \
+    SUB(Service, NIM)                                                                              \
+    SUB(Service, NPNS)                                                                             \
+    SUB(Service, NS)                                                                               \
+    SUB(Service, NVDRV)                                                                            \
+    SUB(Service, PCIE)                                                                             \
+    SUB(Service, PCTL)                                                                             \
+    SUB(Service, PCV)                                                                              \
+    SUB(Service, PM)                                                                               \
+    SUB(Service, PREPO)                                                                            \
+    SUB(Service, PSC)                                                                              \
+    SUB(Service, PSM)                                                                              \
+    SUB(Service, SET)                                                                              \
+    SUB(Service, SM)                                                                               \
+    SUB(Service, SPL)                                                                              \
+    SUB(Service, SSL)                                                                              \
+    SUB(Service, TCAP)                                                                             \
+    SUB(Service, Time)                                                                             \
+    SUB(Service, USB)                                                                              \
+    SUB(Service, VI)                                                                               \
+    SUB(Service, WLAN)                                                                             \
     CLS(HW)                                                                                        \
     SUB(HW, Memory)                                                                                \
     SUB(HW, LCD)                                                                                   \
     SUB(HW, GPU)                                                                                   \
     SUB(HW, AES)                                                                                   \
+    CLS(IPC)                                                                                       \
     CLS(Frontend)                                                                                  \
     CLS(Render)                                                                                    \
     SUB(Render, Software)                                                                          \
@@ -53,6 +238,7 @@ namespace Log {
     CLS(Input)                                                                                     \
     CLS(Network)                                                                                   \
     CLS(Loader)                                                                                    \
+    CLS(Crypto)                                                                                    \
     CLS(WebService)
 
 // GetClassName is a macro defined by Windows.h, grrr...
@@ -90,45 +276,51 @@ const char* GetLevelName(Level log_level) {
 }
 
 Entry CreateEntry(Class log_class, Level log_level, const char* filename, unsigned int line_nr,
-                  const char* function, const char* format, va_list args) {
-    using std::chrono::steady_clock;
+                  const char* function, std::string message) {
     using std::chrono::duration_cast;
+    using std::chrono::steady_clock;
 
     static steady_clock::time_point time_origin = steady_clock::now();
-
-    std::array<char, 4 * 1024> formatting_buffer;
 
     Entry entry;
     entry.timestamp = duration_cast<std::chrono::microseconds>(steady_clock::now() - time_origin);
     entry.log_class = log_class;
     entry.log_level = log_level;
-
-    snprintf(formatting_buffer.data(), formatting_buffer.size(), "%s:%s:%u", filename, function,
-             line_nr);
-    entry.location = std::string(formatting_buffer.data());
-
-    vsnprintf(formatting_buffer.data(), formatting_buffer.size(), format, args);
-    entry.message = std::string(formatting_buffer.data());
+    entry.filename = Common::TrimSourcePath(filename);
+    entry.line_num = line_nr;
+    entry.function = function;
+    entry.message = std::move(message);
 
     return entry;
 }
 
-static Filter* filter = nullptr;
-
-void SetFilter(Filter* new_filter) {
-    filter = new_filter;
+void SetGlobalFilter(const Filter& filter) {
+    Impl::Instance().SetGlobalFilter(filter);
 }
 
-void LogMessage(Class log_class, Level log_level, const char* filename, unsigned int line_nr,
-                const char* function, const char* format, ...) {
-    if (filter != nullptr && !filter->CheckMessage(log_class, log_level))
+void AddBackend(std::unique_ptr<Backend> backend) {
+    Impl::Instance().AddBackend(std::move(backend));
+}
+
+void RemoveBackend(std::string_view backend_name) {
+    Impl::Instance().RemoveBackend(backend_name);
+}
+
+Backend* GetBackend(std::string_view backend_name) {
+    return Impl::Instance().GetBackend(backend_name);
+}
+
+void FmtLogMessageImpl(Class log_class, Level log_level, const char* filename,
+                       unsigned int line_num, const char* function, const char* format,
+                       const fmt::format_args& args) {
+    auto& instance = Impl::Instance();
+    const auto& filter = instance.GetGlobalFilter();
+    if (!filter.CheckMessage(log_class, log_level))
         return;
 
-    va_list args;
-    va_start(args, format);
-    Entry entry = CreateEntry(log_class, log_level, filename, line_nr, function, format, args);
-    va_end(args);
+    Entry entry =
+        CreateEntry(log_class, log_level, filename, line_num, function, fmt::vformat(format, args));
 
-    PrintColoredMessage(entry);
+    instance.PushEntry(std::move(entry));
 }
-}
+} // namespace Log

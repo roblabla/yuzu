@@ -48,9 +48,8 @@ struct Elf64_Sym {
 };
 static_assert(sizeof(Elf64_Sym) == 0x18, "Elf64_Sym has incorrect size.");
 
-void Linker::WriteRelocations(std::vector<u8>& program_image,
-                                  const std::vector<Symbol>& symbols, u64 relocation_offset,
-                                  u64 size, bool is_jump_relocation, VAddr load_base) {
+void Linker::WriteRelocations(std::vector<u8>& program_image, const std::vector<Symbol>& symbols,
+                              u64 relocation_offset, u64 size, VAddr load_base) {
     for (u64 i = 0; i < size; i += sizeof(Elf64_Rela)) {
         Elf64_Rela rela;
         std::memcpy(&rela, &program_image[relocation_offset + i], sizeof(Elf64_Rela));
@@ -84,14 +83,13 @@ void Linker::WriteRelocations(std::vector<u8>& program_image,
             }
             break;
         default:
-            LOG_CRITICAL(Loader, "Unknown relocation type: %d", rela.type);
+            LOG_CRITICAL(Loader, "Unknown relocation type: {}", static_cast<int>(rela.type));
             break;
         }
     }
 }
 
-void Linker::Relocate(std::vector<u8>& program_image, u32 dynamic_section_offset,
-                          VAddr load_base) {
+void Linker::Relocate(std::vector<u8>& program_image, u32 dynamic_section_offset, VAddr load_base) {
     std::map<u64, u64> dynamic;
     while (dynamic_section_offset < program_image.size()) {
         Elf64_Dyn dyn;
@@ -125,12 +123,11 @@ void Linker::Relocate(std::vector<u8>& program_image, u32 dynamic_section_offset
     }
 
     if (dynamic.find(DT_RELA) != dynamic.end()) {
-        WriteRelocations(program_image, symbols, dynamic[DT_RELA], dynamic[DT_RELASZ], false,
-                         load_base);
+        WriteRelocations(program_image, symbols, dynamic[DT_RELA], dynamic[DT_RELASZ], load_base);
     }
 
     if (dynamic.find(DT_JMPREL) != dynamic.end()) {
-        WriteRelocations(program_image, symbols, dynamic[DT_JMPREL], dynamic[DT_PLTRELSZ], true,
+        WriteRelocations(program_image, symbols, dynamic[DT_JMPREL], dynamic[DT_PLTRELSZ],
                          load_base);
     }
 }
@@ -141,9 +138,8 @@ void Linker::ResolveImports() {
         const auto& search = exports.find(import.first);
         if (search != exports.end()) {
             Memory::Write64(import.second.ea, search->second + import.second.addend);
-        }
-        else {
-            LOG_ERROR(Loader, "Unresolved import: %s", import.first.c_str());
+        } else {
+            LOG_ERROR(Loader, "Unresolved import: {}", import.first);
         }
     }
 }

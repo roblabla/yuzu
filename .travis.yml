@@ -2,6 +2,13 @@ language: cpp
 matrix:
   include:
     - os: linux
+      env: NAME="clang-format"
+      sudo: required
+      dist: trusty
+      services: docker
+      install: "./.travis/clang-format/deps.sh"
+      script: "./.travis/clang-format/build.sh"
+    - os: linux
       env: NAME="linux build"
       sudo: required
       dist: trusty
@@ -13,28 +20,40 @@ matrix:
       install: "./.travis/linux/deps.sh"
       script: "./.travis/linux/build.sh"
       after_success: "./.travis/linux/upload.sh"
+      cache: ccache
     - os: osx
       env: NAME="macos build"
       sudo: false
-      osx_image: xcode7.3
+      osx_image: xcode10
       install: "./.travis/macos/deps.sh"
       script: "./.travis/macos/build.sh"
       after_success: "./.travis/macos/upload.sh"
+      cache: ccache
     - os: linux
-      env: NAME="clang-format"
+      env: NAME="MinGW build"
+      sudo: required
       dist: trusty
+      services: docker
       addons:
         apt:
           packages:
-            - clang-format-3.9
-      script: "./.travis/clang-format/script.sh"
+            - p7zip-full
+      install: "./.travis/linux-mingw/deps.sh"
+      script: "./.travis/linux-mingw/build.sh"
+      after_success: "./.travis/linux-mingw/upload.sh"
+      cache: ccache
 
 deploy:
   provider: releases
   api_key:
-    secure: Mck15DIWaJdxDiS3aYVlM9N3G6y8VKUI1rnwII7/iolfm1s94U+tgvbheZDmT7SSbFyaGaYO/E8HrV/uZR9Vvs7ev20sHsTN1u60OTWfDIIyHs9SqjhcGbtq95m9/dMFschOYqTOR+gAs5BsxjuoeAotHdhpQEwvkO2oo5oR0zhGy45gjFnVvtcxT/IfpZBIpVgcK3aLb9zT6ekcJbSiPmEB15iLq3xXd0nFUNtEZdX3D6Veye4n5jB6n72qN8JVoKvPZAwaC2K0pZxpcGJaXDchLsw1q+4eCvdz6UJfUemeQ/uMAmjfeQ3wrzYGXe3nCM3WmX5wosCsB0mw4zYatzl3si6CZ1W+0GkV4Rwlx03dfp7v3EeFhTsXYCaXqhwuLZnWOLUik8t9vaSoFUx4nUIRwfO9kAMUJQSpLuHNO2nT01s3GxvqxzczuLQ9he5nGSi0RRodUzDwek1qUp6I4uV3gRHKz4B07YIc1i2fK88NLXjyQ0uLVZ+7Oq1+kgDp6+N7vvXXZ5qZ17tdaysSbKEE0Y8zsoXw7Rk1tPN19vrCS+TSpomNMyQyne1k+I5iZ/qkxPTLAS5qI6Utc2dL3GJdxWRAEfGNO9AIX3GV/jmmKfdcvwGsCYP8hxqs5vLYfgacw3D8NLf1941lQUwavC17jm9EV9g5G3Pn1Cp516E=
+    secure: ElsIAlbvVXBNKsP31nVPysh+mf0GQA4DiL/y5iJeQxKQYR6iRoNo+RfzOBmdswdo0bE/PGeBAlfzCkp15gjhWf6Je0N6dRpczmcmLq6SSQFn1Mpq00xMJB2AgQIlaHs6KFgoUA173EBKbPwgU/NubTFpJFm/Wa+NcSWAHQXKL9KT2M3qKpxNkPl3mKEVsbch4REP+T/46vsa+ikw0VE0kIs6V93LqUQZpI2F0Dhihx8Cxr5iedkE1QsNK+QSX9iItMHbfek9OH980gP7L3lkZltyAA1Pk0c37OAgz2PwczwNKwCT8jg9PMzdcKmWouvLyAkZFuA806ElzwHY3oEd91Zm6+Bk5n24yBKZ9027AZzw38NK2Z2m9Akb8+ar8PdsKU6N5pDutX9qSLayr0oMgJ0s7/xnGBGdL3gfkPCFc50xO/2DxlsOR+zAhPNM9Y76hhGy6A7/40+9uzrJvd4nAuDvIXRzi2Yl2L7mKBE4suMKbFLtk2LlgM0qY5JMVTQ8NliaEtqopfPur2KWFVJUpWDNLtNX8xGqhfwg7cLjIiGmnxSaJBTDuZI6dpEjkWkU0n1xYhGqEqit8DbehYzazozMJ+Vsr8hku7jGlUtlw+U6HG1e19O2y4aGeSwYPROcCNz+BLwmVM8oZE3Roy3qoaa2yiFf+sy6rUHznrhsfEM=
   file_glob: true
   file: "artifacts/*"
   skip_cleanup: true
   on:
     tags: true
+
+notifications:
+  webhooks:
+    urls:
+      - https://api.yuzu-emu.org/code/travis/notify

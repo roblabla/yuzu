@@ -3,92 +3,57 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
-#include <list>
+#include <cinttypes>
+#include <optional>
 #include <vector>
+
+#include <boost/range/algorithm_ext/erase.hpp>
+
 #include "common/assert.h"
 #include "common/common_types.h"
 #include "common/logging/log.h"
-#include "common/math_util.h"
 #include "common/thread_queue_list.h"
 #include "core/arm/arm_interface.h"
 #include "core/core.h"
+#include "core/core_cpu.h"
 #include "core/core_timing.h"
+#include "core/core_timing_util.h"
 #include "core/hle/kernel/errors.h"
 #include "core/hle/kernel/handle_table.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/memory.h"
-#include "core/hle/kernel/mutex.h"
+#include "core/hle/kernel/object.h"
 #include "core/hle/kernel/process.h"
+#include "core/hle/kernel/scheduler.h"
 #include "core/hle/kernel/thread.h"
 #include "core/hle/result.h"
 #include "core/memory.h"
 
 namespace Kernel {
 
-/// Event type for the thread wake up event
-static CoreTiming::EventType* ThreadWakeupEventType = nullptr;
-
 bool Thread::ShouldWait(Thread* thread) const {
-    return status != THREADSTATUS_DEAD;
+    return status != ThreadStatus::Dead;
 }
 
 void Thread::Acquire(Thread* thread) {
     ASSERT_MSG(!ShouldWait(thread), "object unavailable!");
 }
 
-// TODO(yuriks): This can be removed if Thread objects are explicitly pooled in the future, allowing
-//               us to simply use a pool index or similar.
-static Kernel::HandleTable wakeup_callback_handle_table;
-
-// Lists all thread ids that aren't deleted/etc.
-static std::vector<SharedPtr<Thread>> thread_list;
-
-// Lists only ready thread ids.
-static Common::ThreadQueueList<Thread*, THREADPRIO_LOWEST + 1> ready_queue;
-
-static SharedPtr<Thread> current_thread;
-
-// The first available thread id at startup
-static u32 next_thread_id;
-
-/**
- * Creates a new thread ID
- * @return The new thread ID
- */
-inline static u32 const NewThreadId() {
-    return next_thread_id++;
-}
-
-Thread::Thread() {}
-Thread::~Thread() {}
-
-Thread* GetCurrentThread() {
-    return current_thread.get();
-}
-
-/**
- * Check if the specified thread is waiting on the specified address to be arbitrated
- * @param thread The thread to test
- * @param wait_address The address to test against
- * @return True if the thread is waiting, false otherwise
- */
-static bool CheckWait_AddressArbiter(const Thread* thread, VAddr wait_address) {
-    return thread->status == THREADSTATUS_WAIT_ARB && wait_address == thread->wait_address;
-}
+Thread::Thread(KernelCore& kernel) : WaitObject{kernel} {}
+Thread::~Thread() = default;
 
 void Thread::Stop() {
     // Cancel any outstanding wakeup events for this thread
-    CoreTiming::UnscheduleEvent(ThreadWakeupEventType, callback_handle);
-    wakeup_callback_handle_table.Close(callback_handle);
+    CoreTiming::UnscheduleEvent(kernel.ThreadWakeupCallbackEventType(), callback_handle);
+    kernel.ThreadWakeupCallbackHandleTable().Close(callback_handle);
     callback_handle = 0;
 
     // Clean up thread from ready queue
-    // This is only needed when the thread is termintated forcefully (SVC TerminateProcess)
-    if (status == THREADSTATUS_READY) {
-        ready_queue.remove(current_priority, this);
+    // This is only needed when the thread is terminated forcefully (SVC TerminateProcess)
+    if (status == ThreadStatus::Ready || status == ThreadStatus::Paused) {
+        scheduler->UnscheduleThread(this, current_priority);
     }
 
-    status = THREADSTATUS_DEAD;
+    status = ThreadStatus::Dead;
 
     WakeupAllWaitingThreads();
 
@@ -98,169 +63,19 @@ void Thread::Stop() {
     }
     wait_objects.clear();
 
-    // Release all the mutexes that this thread holds
-    ReleaseThreadMutexes(this);
-
     // Mark the TLS slot in the thread's page as free.
-    u64 tls_page = (tls_address - Memory::TLS_AREA_VADDR) / Memory::PAGE_SIZE;
-    u64 tls_slot =
-        ((tls_address - Memory::TLS_AREA_VADDR) % Memory::PAGE_SIZE) / Memory::TLS_ENTRY_SIZE;
-    Kernel::g_current_process->tls_slots[tls_page].reset(tls_slot);
-}
-
-Thread* ArbitrateHighestPriorityThread(u32 address) {
-    Thread* highest_priority_thread = nullptr;
-    u32 priority = THREADPRIO_LOWEST;
-
-    // Iterate through threads, find highest priority thread that is waiting to be arbitrated...
-    for (auto& thread : thread_list) {
-        if (!CheckWait_AddressArbiter(thread.get(), address))
-            continue;
-
-        if (thread == nullptr)
-            continue;
-
-        if (thread->current_priority <= priority) {
-            highest_priority_thread = thread.get();
-            priority = thread->current_priority;
-        }
-    }
-
-    // If a thread was arbitrated, resume it
-    if (nullptr != highest_priority_thread) {
-        highest_priority_thread->ResumeFromWait();
-    }
-
-    return highest_priority_thread;
-}
-
-void ArbitrateAllThreads(u32 address) {
-    // Resume all threads found to be waiting on the address
-    for (auto& thread : thread_list) {
-        if (CheckWait_AddressArbiter(thread.get(), address))
-            thread->ResumeFromWait();
-    }
-}
-
-/**
- * Switches the CPU's active thread context to that of the specified thread
- * @param new_thread The thread to switch to
- */
-static void SwitchContext(Thread* new_thread) {
-    Thread* previous_thread = GetCurrentThread();
-
-    // Save context for previous thread
-    if (previous_thread) {
-        previous_thread->last_running_ticks = CoreTiming::GetTicks();
-        Core::CPU().SaveContext(previous_thread->context);
-
-        if (previous_thread->status == THREADSTATUS_RUNNING) {
-            // This is only the case when a reschedule is triggered without the current thread
-            // yielding execution (i.e. an event triggered, system core time-sliced, etc)
-            ready_queue.push_front(previous_thread->current_priority, previous_thread);
-            previous_thread->status = THREADSTATUS_READY;
-        }
-    }
-
-    // Load context of new thread
-    if (new_thread) {
-        ASSERT_MSG(new_thread->status == THREADSTATUS_READY,
-                   "Thread must be ready to become running.");
-
-        // Cancel any outstanding wakeup events for this thread
-        CoreTiming::UnscheduleEvent(ThreadWakeupEventType, new_thread->callback_handle);
-
-        auto previous_process = Kernel::g_current_process;
-
-        current_thread = new_thread;
-
-        ready_queue.remove(new_thread->current_priority, new_thread);
-        new_thread->status = THREADSTATUS_RUNNING;
-
-        if (previous_process != current_thread->owner_process) {
-            Kernel::g_current_process = current_thread->owner_process;
-            SetCurrentPageTable(&Kernel::g_current_process->vm_manager.page_table);
-        }
-
-        Core::CPU().LoadContext(new_thread->context);
-        Core::CPU().SetTlsAddress(new_thread->GetTLSAddress());
-    } else {
-        current_thread = nullptr;
-        // Note: We do not reset the current process and current page table when idling because
-        // technically we haven't changed processes, our threads are just paused.
-    }
-}
-
-/**
- * Pops and returns the next thread from the thread queue
- * @return A pointer to the next ready thread
- */
-static Thread* PopNextReadyThread() {
-    Thread* next;
-    Thread* thread = GetCurrentThread();
-
-    if (thread && thread->status == THREADSTATUS_RUNNING) {
-        // We have to do better than the current thread.
-        // This call returns null when that's not possible.
-        next = ready_queue.pop_first_better(thread->current_priority);
-        if (!next) {
-            // Otherwise just keep going with the current thread
-            next = thread;
-        }
-    } else {
-        next = ready_queue.pop_first();
-    }
-
-    return next;
+    owner_process->FreeTLSSlot(tls_address);
 }
 
 void WaitCurrentThread_Sleep() {
     Thread* thread = GetCurrentThread();
-    thread->status = THREADSTATUS_WAIT_SLEEP;
-}
-
-void WaitCurrentThread_ArbitrateAddress(VAddr wait_address) {
-    Thread* thread = GetCurrentThread();
-    thread->wait_address = wait_address;
-    thread->status = THREADSTATUS_WAIT_ARB;
+    thread->SetStatus(ThreadStatus::WaitSleep);
 }
 
 void ExitCurrentThread() {
     Thread* thread = GetCurrentThread();
     thread->Stop();
-    thread_list.erase(std::remove(thread_list.begin(), thread_list.end(), thread),
-                      thread_list.end());
-}
-
-/**
- * Callback that will wake up the thread it was scheduled for
- * @param thread_handle The handle of the thread that's been awoken
- * @param cycles_late The number of CPU cycles that have passed since the desired wakeup time
- */
-static void ThreadWakeupCallback(u64 thread_handle, int cycles_late) {
-    SharedPtr<Thread> thread = wakeup_callback_handle_table.Get<Thread>((Handle)thread_handle);
-    if (thread == nullptr) {
-        LOG_CRITICAL(Kernel, "Callback fired for invalid thread %08X", (Handle)thread_handle);
-        return;
-    }
-
-    bool resume = true;
-
-    if (thread->status == THREADSTATUS_WAIT_SYNCH_ANY ||
-        thread->status == THREADSTATUS_WAIT_SYNCH_ALL || thread->status == THREADSTATUS_WAIT_ARB) {
-
-        // Remove the thread from each of its waiting objects' waitlists
-        for (auto& object : thread->wait_objects)
-            object->RemoveWaitingThread(thread.get());
-        thread->wait_objects.clear();
-
-        // Invoke the wakeup callback before clearing the wait objects
-        if (thread->wakeup_callback)
-            resume = thread->wakeup_callback(ThreadWakeupReason::Timeout, thread, nullptr, 0);
-    }
-
-    if (resume)
-        thread->ResumeFromWait();
+    Core::System::GetInstance().CurrentScheduler().RemoveThread(thread);
 }
 
 void Thread::WakeAfterDelay(s64 nanoseconds) {
@@ -268,92 +83,70 @@ void Thread::WakeAfterDelay(s64 nanoseconds) {
     if (nanoseconds == -1)
         return;
 
-    CoreTiming::ScheduleEvent(nsToCycles(nanoseconds), ThreadWakeupEventType, callback_handle);
+    // This function might be called from any thread so we have to be cautious and use the
+    // thread-safe version of ScheduleEvent.
+    CoreTiming::ScheduleEventThreadsafe(CoreTiming::nsToCycles(nanoseconds),
+                                        kernel.ThreadWakeupCallbackEventType(), callback_handle);
 }
 
 void Thread::CancelWakeupTimer() {
-    CoreTiming::UnscheduleEvent(ThreadWakeupEventType, callback_handle);
+    CoreTiming::UnscheduleEventThreadsafe(kernel.ThreadWakeupCallbackEventType(), callback_handle);
+}
+
+static std::optional<s32> GetNextProcessorId(u64 mask) {
+    for (s32 index = 0; index < Core::NUM_CPU_CORES; ++index) {
+        if (mask & (1ULL << index)) {
+            if (!Core::System::GetInstance().Scheduler(index).GetCurrentThread()) {
+                // Core is enabled and not running any threads, use this one
+                return index;
+            }
+        }
+    }
+    return {};
 }
 
 void Thread::ResumeFromWait() {
     ASSERT_MSG(wait_objects.empty(), "Thread is waking up while waiting for objects");
 
     switch (status) {
-    case THREADSTATUS_WAIT_SYNCH_ALL:
-    case THREADSTATUS_WAIT_SYNCH_ANY:
-    case THREADSTATUS_WAIT_ARB:
-    case THREADSTATUS_WAIT_SLEEP:
+    case ThreadStatus::WaitSynchAll:
+    case ThreadStatus::WaitSynchAny:
+    case ThreadStatus::WaitHLEEvent:
+    case ThreadStatus::WaitSleep:
+    case ThreadStatus::WaitIPC:
+    case ThreadStatus::WaitMutex:
+    case ThreadStatus::WaitArb:
         break;
 
-    case THREADSTATUS_READY:
+    case ThreadStatus::Ready:
         // The thread's wakeup callback must have already been cleared when the thread was first
         // awoken.
         ASSERT(wakeup_callback == nullptr);
         // If the thread is waiting on multiple wait objects, it might be awoken more than once
         // before actually resuming. We can ignore subsequent wakeups if the thread status has
-        // already been set to THREADSTATUS_READY.
+        // already been set to ThreadStatus::Ready.
         return;
 
-    case THREADSTATUS_RUNNING:
-        DEBUG_ASSERT_MSG(false, "Thread with object id %u has already resumed.", GetObjectId());
+    case ThreadStatus::Running:
+        DEBUG_ASSERT_MSG(false, "Thread with object id {} has already resumed.", GetObjectId());
         return;
-    case THREADSTATUS_DEAD:
+    case ThreadStatus::Dead:
         // This should never happen, as threads must complete before being stopped.
-        DEBUG_ASSERT_MSG(false, "Thread with object id %u cannot be resumed because it's DEAD.",
+        DEBUG_ASSERT_MSG(false, "Thread with object id {} cannot be resumed because it's DEAD.",
                          GetObjectId());
         return;
     }
 
     wakeup_callback = nullptr;
 
-    ready_queue.push_back(current_priority, this);
-    status = THREADSTATUS_READY;
-    Core::System::GetInstance().PrepareReschedule();
-}
-
-/**
- * Prints the thread queue for debugging purposes
- */
-static void DebugThreadQueue() {
-    Thread* thread = GetCurrentThread();
-    if (!thread) {
-        LOG_DEBUG(Kernel, "Current: NO CURRENT THREAD");
-    } else {
-        LOG_DEBUG(Kernel, "0x%02X %u (current)", thread->current_priority,
-                  GetCurrentThread()->GetObjectId());
+    if (activity == ThreadActivity::Paused) {
+        status = ThreadStatus::Paused;
+        return;
     }
 
-    for (auto& t : thread_list) {
-        u32 priority = ready_queue.contains(t.get());
-        if (priority != -1) {
-            LOG_DEBUG(Kernel, "0x%02X %u", priority, t->GetObjectId());
-        }
-    }
-}
+    status = ThreadStatus::Ready;
 
-/**
- * Finds a free location for the TLS section of a thread.
- * @param tls_slots The TLS page array of the thread's owner process.
- * Returns a tuple of (page, slot, alloc_needed) where:
- * page: The index of the first allocated TLS page that has free slots.
- * slot: The index of the first free slot in the indicated page.
- * alloc_needed: Whether there's a need to allocate a new TLS page (All pages are full).
- */
-std::tuple<u32, u32, bool> GetFreeThreadLocalSlot(std::vector<std::bitset<8>>& tls_slots) {
-    // Iterate over all the allocated pages, and try to find one where not all slots are used.
-    for (unsigned page = 0; page < tls_slots.size(); ++page) {
-        const auto& page_tls_slots = tls_slots[page];
-        if (!page_tls_slots.all()) {
-            // We found a page with at least one free slot, find which slot it is
-            for (unsigned slot = 0; slot < page_tls_slots.size(); ++slot) {
-                if (!page_tls_slots.test(slot)) {
-                    return std::make_tuple(page, slot, false);
-                }
-            }
-        }
-    }
-
-    return std::make_tuple(0, 0, true);
+    ChangeScheduler();
 }
 
 /**
@@ -363,102 +156,61 @@ std::tuple<u32, u32, bool> GetFreeThreadLocalSlot(std::vector<std::bitset<8>>& t
  * @param entry_point Address of entry point for execution
  * @param arg User argument for thread
  */
-static void ResetThreadContext(ARM_Interface::ThreadContext& context, VAddr stack_top,
+static void ResetThreadContext(Core::ARM_Interface::ThreadContext& context, VAddr stack_top,
                                VAddr entry_point, u64 arg) {
-    memset(&context, 0, sizeof(ARM_Interface::ThreadContext));
-
+    context = {};
     context.cpu_registers[0] = arg;
     context.pc = entry_point;
     context.sp = stack_top;
-    context.cpsr = 0;
-    context.fpscr = 0;
+    // TODO(merry): Perform a hardware test to determine the below value.
+    // AHP = 0, DN = 1, FTZ = 1, RMode = Round towards zero
+    context.fpcr = 0x03C00000;
 }
 
-ResultVal<SharedPtr<Thread>> Thread::Create(std::string name, VAddr entry_point, u32 priority,
-                                            u64 arg, s32 processor_id, VAddr stack_top,
-                                            SharedPtr<Process> owner_process) {
+ResultVal<SharedPtr<Thread>> Thread::Create(KernelCore& kernel, std::string name, VAddr entry_point,
+                                            u32 priority, u64 arg, s32 processor_id,
+                                            VAddr stack_top, Process& owner_process) {
     // Check if priority is in ranged. Lowest priority -> highest priority id.
     if (priority > THREADPRIO_LOWEST) {
-        LOG_ERROR(Kernel_SVC, "Invalid thread priority: %d", priority);
-        return ERR_OUT_OF_RANGE;
+        LOG_ERROR(Kernel_SVC, "Invalid thread priority: {}", priority);
+        return ERR_INVALID_THREAD_PRIORITY;
     }
 
     if (processor_id > THREADPROCESSORID_MAX) {
-        LOG_ERROR(Kernel_SVC, "Invalid processor id: %d", processor_id);
-        return ERR_OUT_OF_RANGE_KERNEL;
+        LOG_ERROR(Kernel_SVC, "Invalid processor id: {}", processor_id);
+        return ERR_INVALID_PROCESSOR_ID;
     }
 
     // TODO(yuriks): Other checks, returning 0xD9001BEA
 
-    if (!Memory::IsValidVirtualAddress(*owner_process, entry_point)) {
-        LOG_ERROR(Kernel_SVC, "(name=%s): invalid entry %08x", name.c_str(), entry_point);
+    if (!Memory::IsValidVirtualAddress(owner_process, entry_point)) {
+        LOG_ERROR(Kernel_SVC, "(name={}): invalid entry {:016X}", name, entry_point);
         // TODO (bunnei): Find the correct error code to use here
         return ResultCode(-1);
     }
 
-    SharedPtr<Thread> thread(new Thread);
+    SharedPtr<Thread> thread(new Thread(kernel));
 
-    thread_list.push_back(thread);
-    ready_queue.prepare(priority);
-
-    thread->thread_id = NewThreadId();
-    thread->status = THREADSTATUS_DORMANT;
+    thread->thread_id = kernel.CreateNewThreadID();
+    thread->status = ThreadStatus::Dormant;
     thread->entry_point = entry_point;
     thread->stack_top = stack_top;
+    thread->tpidr_el0 = 0;
     thread->nominal_priority = thread->current_priority = priority;
     thread->last_running_ticks = CoreTiming::GetTicks();
     thread->processor_id = processor_id;
+    thread->ideal_core = processor_id;
+    thread->affinity_mask = 1ULL << processor_id;
     thread->wait_objects.clear();
-    thread->wait_address = 0;
+    thread->mutex_wait_address = 0;
+    thread->condvar_wait_address = 0;
+    thread->wait_handle = 0;
     thread->name = std::move(name);
-    thread->callback_handle = wakeup_callback_handle_table.Create(thread).Unwrap();
-    thread->owner_process = owner_process;
-
-    // Find the next available TLS index, and mark it as used
-    auto& tls_slots = owner_process->tls_slots;
-    bool needs_allocation = true;
-    u32 available_page; // Which allocated page has free space
-    u32 available_slot; // Which slot within the page is free
-
-    std::tie(available_page, available_slot, needs_allocation) = GetFreeThreadLocalSlot(tls_slots);
-
-    if (needs_allocation) {
-        // There are no already-allocated pages with free slots, lets allocate a new one.
-        // TLS pages are allocated from the BASE region in the linear heap.
-        MemoryRegionInfo* memory_region = GetMemoryRegion(MemoryRegion::BASE);
-        auto& linheap_memory = memory_region->linear_heap_memory;
-
-        if (linheap_memory->size() + Memory::PAGE_SIZE > memory_region->size) {
-            LOG_ERROR(Kernel_SVC,
-                      "Not enough space in region to allocate a new TLS page for thread");
-            return ERR_OUT_OF_MEMORY;
-        }
-
-        size_t offset = linheap_memory->size();
-
-        // Allocate some memory from the end of the linear heap for this region.
-        linheap_memory->insert(linheap_memory->end(), Memory::PAGE_SIZE, 0);
-        memory_region->used += Memory::PAGE_SIZE;
-        owner_process->linear_heap_used += Memory::PAGE_SIZE;
-
-        tls_slots.emplace_back(0); // The page is completely available at the start
-        available_page = static_cast<u32>(tls_slots.size() - 1);
-        available_slot = 0; // Use the first slot in the new page
-
-        auto& vm_manager = owner_process->vm_manager;
-        vm_manager.RefreshMemoryBlockMappings(linheap_memory.get());
-
-        // Map the page to the current process' address space.
-        // TODO(Subv): Find the correct MemoryState for this region.
-        vm_manager.MapMemoryBlock(Memory::TLS_AREA_VADDR + available_page * Memory::PAGE_SIZE,
-                                  linheap_memory, offset, Memory::PAGE_SIZE,
-                                  MemoryState::ThreadLocalStorage);
-    }
-
-    // Mark the slot as used
-    tls_slots[available_page].set(available_slot);
-    thread->tls_address = Memory::TLS_AREA_VADDR + available_page * Memory::PAGE_SIZE +
-                          available_slot * Memory::TLS_ENTRY_SIZE;
+    thread->callback_handle = kernel.ThreadWakeupCallbackHandleTable().Create(thread).Unwrap();
+    thread->owner_process = &owner_process;
+    thread->scheduler = &Core::System::GetInstance().Scheduler(processor_id);
+    thread->scheduler->AddThread(thread, priority);
+    thread->tls_address = thread->owner_process->MarkNextAvailableTLSSlotAsUsed(*thread);
 
     // TODO(peachum): move to ScheduleThread() when scheduler is added so selected core is used
     // to initialize the context
@@ -470,72 +222,13 @@ ResultVal<SharedPtr<Thread>> Thread::Create(std::string name, VAddr entry_point,
 void Thread::SetPriority(u32 priority) {
     ASSERT_MSG(priority <= THREADPRIO_LOWEST && priority >= THREADPRIO_HIGHEST,
                "Invalid priority value.");
-    // If thread was ready, adjust queues
-    if (status == THREADSTATUS_READY)
-        ready_queue.move(this, current_priority, priority);
-    else
-        ready_queue.prepare(priority);
-
-    nominal_priority = current_priority = priority;
-}
-
-void Thread::UpdatePriority() {
-    u32 best_priority = nominal_priority;
-    for (auto& mutex : held_mutexes) {
-        if (mutex->priority < best_priority)
-            best_priority = mutex->priority;
-    }
-    BoostPriority(best_priority);
+    nominal_priority = priority;
+    UpdatePriority();
 }
 
 void Thread::BoostPriority(u32 priority) {
-    // If thread was ready, adjust queues
-    if (status == THREADSTATUS_READY)
-        ready_queue.move(this, current_priority, priority);
-    else
-        ready_queue.prepare(priority);
+    scheduler->SetThreadPriority(this, priority);
     current_priority = priority;
-}
-
-SharedPtr<Thread> SetupMainThread(VAddr entry_point, u32 priority,
-                                  SharedPtr<Process> owner_process) {
-    // Setup page table so we can write to memory
-    SetCurrentPageTable(&Kernel::g_current_process->vm_manager.page_table);
-
-    // Initialize new "main" thread
-    auto thread_res = Thread::Create("main", entry_point, priority, 0, THREADPROCESSORID_0,
-                                     Memory::HEAP_VADDR_END, owner_process);
-
-    SharedPtr<Thread> thread = std::move(thread_res).Unwrap();
-
-    // Register 1 must be a handle to the main thread
-    thread->guest_handle = Kernel::g_handle_table.Create(thread).Unwrap();
-
-    thread->context.cpu_registers[1] = thread->guest_handle;
-
-    // Threads by default are dormant, wake up the main thread so it runs when the scheduler fires
-    thread->ResumeFromWait();
-
-    return thread;
-}
-
-bool HaveReadyThreads() {
-    return ready_queue.get_first() != nullptr;
-}
-
-void Reschedule() {
-    Thread* cur = GetCurrentThread();
-    Thread* next = PopNextReadyThread();
-
-    if (cur && next) {
-        LOG_TRACE(Kernel, "context switch %u -> %u", cur->GetObjectId(), next->GetObjectId());
-    } else if (cur) {
-        LOG_TRACE(Kernel, "context switch %u -> idle", cur->GetObjectId());
-    } else if (next) {
-        LOG_TRACE(Kernel, "context switch idle -> %u", next->GetObjectId());
-    }
-
-    SwitchContext(next);
 }
 
 void Thread::SetWaitSynchronizationResult(ResultCode result) {
@@ -558,27 +251,151 @@ VAddr Thread::GetCommandBufferAddress() const {
     return GetTLSAddress() + CommandHeaderOffset;
 }
 
+void Thread::SetStatus(ThreadStatus new_status) {
+    if (new_status == status) {
+        return;
+    }
+
+    if (status == ThreadStatus::Running) {
+        last_running_ticks = CoreTiming::GetTicks();
+    }
+
+    status = new_status;
+}
+
+void Thread::AddMutexWaiter(SharedPtr<Thread> thread) {
+    if (thread->lock_owner == this) {
+        // If the thread is already waiting for this thread to release the mutex, ensure that the
+        // waiters list is consistent and return without doing anything.
+        auto itr = std::find(wait_mutex_threads.begin(), wait_mutex_threads.end(), thread);
+        ASSERT(itr != wait_mutex_threads.end());
+        return;
+    }
+
+    // A thread can't wait on two different mutexes at the same time.
+    ASSERT(thread->lock_owner == nullptr);
+
+    // Ensure that the thread is not already in the list of mutex waiters
+    auto itr = std::find(wait_mutex_threads.begin(), wait_mutex_threads.end(), thread);
+    ASSERT(itr == wait_mutex_threads.end());
+
+    thread->lock_owner = this;
+    wait_mutex_threads.emplace_back(std::move(thread));
+    UpdatePriority();
+}
+
+void Thread::RemoveMutexWaiter(SharedPtr<Thread> thread) {
+    ASSERT(thread->lock_owner == this);
+
+    // Ensure that the thread is in the list of mutex waiters
+    auto itr = std::find(wait_mutex_threads.begin(), wait_mutex_threads.end(), thread);
+    ASSERT(itr != wait_mutex_threads.end());
+
+    boost::remove_erase(wait_mutex_threads, thread);
+    thread->lock_owner = nullptr;
+    UpdatePriority();
+}
+
+void Thread::UpdatePriority() {
+    // Find the highest priority among all the threads that are waiting for this thread's lock
+    u32 new_priority = nominal_priority;
+    for (const auto& thread : wait_mutex_threads) {
+        if (thread->nominal_priority < new_priority)
+            new_priority = thread->nominal_priority;
+    }
+
+    if (new_priority == current_priority)
+        return;
+
+    scheduler->SetThreadPriority(this, new_priority);
+
+    current_priority = new_priority;
+
+    // Recursively update the priority of the thread that depends on the priority of this one.
+    if (lock_owner)
+        lock_owner->UpdatePriority();
+}
+
+void Thread::ChangeCore(u32 core, u64 mask) {
+    ideal_core = core;
+    affinity_mask = mask;
+    ChangeScheduler();
+}
+
+void Thread::ChangeScheduler() {
+    if (status != ThreadStatus::Ready) {
+        return;
+    }
+
+    auto& system = Core::System::GetInstance();
+    std::optional<s32> new_processor_id{GetNextProcessorId(affinity_mask)};
+
+    if (!new_processor_id) {
+        new_processor_id = processor_id;
+    }
+    if (ideal_core != -1 && system.Scheduler(ideal_core).GetCurrentThread() == nullptr) {
+        new_processor_id = ideal_core;
+    }
+
+    ASSERT(*new_processor_id < 4);
+
+    // Add thread to new core's scheduler
+    auto& next_scheduler = system.Scheduler(*new_processor_id);
+
+    if (*new_processor_id != processor_id) {
+        // Remove thread from previous core's scheduler
+        scheduler->RemoveThread(this);
+        next_scheduler.AddThread(this, current_priority);
+    }
+
+    processor_id = *new_processor_id;
+
+    // If the thread was ready, unschedule from the previous core and schedule on the new core
+    scheduler->UnscheduleThread(this, current_priority);
+    next_scheduler.ScheduleThread(this, current_priority);
+
+    // Change thread's scheduler
+    scheduler = &next_scheduler;
+
+    system.CpuCore(processor_id).PrepareReschedule();
+}
+
+bool Thread::AllWaitObjectsReady() {
+    return std::none_of(
+        wait_objects.begin(), wait_objects.end(),
+        [this](const SharedPtr<WaitObject>& object) { return object->ShouldWait(this); });
+}
+
+bool Thread::InvokeWakeupCallback(ThreadWakeupReason reason, SharedPtr<Thread> thread,
+                                  SharedPtr<WaitObject> object, std::size_t index) {
+    ASSERT(wakeup_callback);
+    return wakeup_callback(reason, std::move(thread), std::move(object), index);
+}
+
+void Thread::SetActivity(ThreadActivity value) {
+    activity = value;
+
+    if (value == ThreadActivity::Paused) {
+        // Set status if not waiting
+        if (status == ThreadStatus::Ready) {
+            status = ThreadStatus::Paused;
+        } else if (status == ThreadStatus::Running) {
+            status = ThreadStatus::Paused;
+            Core::System::GetInstance().CpuCore(processor_id).PrepareReschedule();
+        }
+    } else if (status == ThreadStatus::Paused) {
+        // Ready to reschedule
+        ResumeFromWait();
+    }
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void ThreadingInit() {
-    ThreadWakeupEventType = CoreTiming::RegisterEvent("ThreadWakeupCallback", ThreadWakeupCallback);
-
-    current_thread = nullptr;
-    next_thread_id = 1;
-}
-
-void ThreadingShutdown() {
-    current_thread = nullptr;
-
-    for (auto& t : thread_list) {
-        t->Stop();
-    }
-    thread_list.clear();
-    ready_queue.clear();
-}
-
-const std::vector<SharedPtr<Thread>>& GetThreadList() {
-    return thread_list;
+/**
+ * Gets the current thread
+ */
+Thread* GetCurrentThread() {
+    return Core::System::GetInstance().CurrentScheduler().GetCurrentThread();
 }
 
 } // namespace Kernel

@@ -1853,7 +1853,7 @@ void MicroProfileDrawBarView(uint32_t nScreenWidth, uint32_t nScreenHeight)
                 {
                     if(nMetaIndex < MICROPROFILE_META_MAX && S.MetaCounters[nMetaIndex].pName)
                     {
-                        uint32_t nStrWidth = strlen(S.MetaCounters[nMetaIndex].pName);
+                        uint32_t nStrWidth = static_cast<uint32_t>(strlen(S.MetaCounters[nMetaIndex].pName));
                         if(S.nBars & MP_DRAW_TIMERS)
                             nWidth += 6 + (1+MICROPROFILE_TEXT_WIDTH) * (nStrWidth);
                         if(S.nBars & MP_DRAW_AVERAGE)
@@ -1907,7 +1907,7 @@ void MicroProfileDrawBarView(uint32_t nScreenWidth, uint32_t nScreenHeight)
     {
         if(0 != (S.nBars & (MP_DRAW_META_FIRST<<i)) && S.MetaCounters[i].pName)
         {
-            uint32_t nBufferSize = strlen(S.MetaCounters[i].pName) + 32;
+            uint32_t nBufferSize = static_cast<uint32_t>(strlen(S.MetaCounters[i].pName) + 32);
             char* buffer = (char*)alloca(nBufferSize);
             if(S.nBars & MP_DRAW_TIMERS)
                 nX += MicroProfileDrawBarMetaCount(nX, nY, &S.MetaCounters[i].nCounters[0], S.MetaCounters[i].pName, nTotalHeight) + 1;
@@ -1991,7 +1991,7 @@ const char* MicroProfileUIMenuGroups(int nIndex, bool* bSelected)
     else
     {
         nIndex = nIndex-1;
-        if(nIndex < UI.GroupMenuCount)
+        if(static_cast<uint32_t>(nIndex) < UI.GroupMenuCount)
         {
             MicroProfileGroupMenuItem& Item = UI.GroupMenu[nIndex];
             static char buffer[MICROPROFILE_NAME_MAX_LEN+32];
@@ -2134,7 +2134,7 @@ const char* MicroProfileUIMenuCustom(int nIndex, bool* bSelected)
     case 1: return "--";
     default:
         nIndex -= 2;
-        if(nIndex < UI.nCustomCount)
+        if(static_cast<uint32_t>(nIndex) < UI.nCustomCount)
         {
             return UI.Custom[nIndex].pName;
         }
@@ -2184,7 +2184,7 @@ void MicroProfileUIClickGroups(int nIndex)
     else
     {
         nIndex -= 1;
-        if(nIndex < UI.GroupMenuCount)
+        if(static_cast<uint32_t>(nIndex) < UI.GroupMenuCount)
         {
             MicroProfileGroupMenuItem& Item = UI.GroupMenu[nIndex];
             if(Item.nIsCategory)
@@ -2599,7 +2599,7 @@ void MicroProfileDrawCustom(uint32_t nWidth, uint32_t nHeight)
             nOffsetY = nOffsetYBase;
             float* pMs = pCustom->nFlags & MICROPROFILE_CUSTOM_BAR_SOURCE_MAX ? pTimeMax : pTimeAvg;
             const char* pString = pCustom->nFlags & MICROPROFILE_CUSTOM_BAR_SOURCE_MAX ? "Max" : "Avg";
-            MicroProfileDrawText(nMaxOffsetX, nOffsetY, (uint32_t)-1, pString, strlen(pString));
+            MicroProfileDrawText(nMaxOffsetX, nOffsetY, (uint32_t)-1, pString, static_cast<uint32_t>(strlen(pString)));
             int nSize = snprintf(Buffer, sizeof(Buffer)-1, "%6.2fms", fReference);
             MicroProfileDrawText(nReducedWidth - (1+nSize) * (MICROPROFILE_TEXT_WIDTH+1), nOffsetY, (uint32_t)-1, Buffer, nSize);
             for(uint32_t i = 0; i < nCount; ++i)
@@ -2613,7 +2613,7 @@ void MicroProfileDrawCustom(uint32_t nWidth, uint32_t nHeight)
         {
             nOffsetY += 2*(1+MICROPROFILE_TEXT_HEIGHT);
             const char* pString = pCustom->nFlags & MICROPROFILE_CUSTOM_STACK_SOURCE_MAX ? "Max" : "Avg";
-            MicroProfileDrawText(MICROPROFILE_CUSTOM_PADDING, nOffsetY, (uint32_t)-1, pString, strlen(pString));
+            MicroProfileDrawText(MICROPROFILE_CUSTOM_PADDING, nOffsetY, (uint32_t)-1, pString, static_cast<uint32_t>(strlen(pString)));
             int nSize = snprintf(Buffer, sizeof(Buffer)-1, "%6.2fms", fReference);
             MicroProfileDrawText(nReducedWidth - (1+nSize) * (MICROPROFILE_TEXT_WIDTH+1), nOffsetY, (uint32_t)-1, Buffer, nSize);
             nOffsetY += (1+MICROPROFILE_TEXT_HEIGHT);

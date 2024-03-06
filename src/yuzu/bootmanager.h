@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <QGLWidget>
+#include <QImage>
 #include <QThread>
 #include "common/thread.h"
 #include "core/core.h"
@@ -15,6 +16,7 @@
 
 class QKeyEvent;
 class QScreen;
+class QTouchEvent;
 
 class GGLWidgetInternal;
 class GMainWindow;
@@ -58,7 +60,7 @@ public:
      * @return True if the emulation thread is running, otherwise false
      * @note This function is thread-safe
      */
-    bool IsRunning() {
+    bool IsRunning() const {
         return running;
     }
 
@@ -68,12 +70,12 @@ public:
     void RequestStop() {
         stop_run = true;
         SetRunning(false);
-    };
+    }
 
 private:
-    bool exec_step;
-    bool running;
-    std::atomic<bool> stop_run;
+    bool exec_step = false;
+    bool running = false;
+    std::atomic<bool> stop_run{false};
     std::mutex running_mutex;
     std::condition_variable running_cv;
 
@@ -101,12 +103,12 @@ signals:
     void ErrorThrown(Core::System::ResultStatus, std::string);
 };
 
-class GRenderWindow : public QWidget, public EmuWindow {
+class GRenderWindow : public QWidget, public Core::Frontend::EmuWindow {
     Q_OBJECT
 
 public:
     GRenderWindow(QWidget* parent, EmuThread* emu_thread);
-    ~GRenderWindow();
+    ~GRenderWindow() override;
 
     // EmuWindow implementation
     void SwapBuffers() override;
@@ -119,7 +121,7 @@ public:
     void restoreGeometry(const QByteArray& geometry); // overridden
     QByteArray saveGeometry();                        // overridden
 
-    qreal windowPixelRatio();
+    qreal windowPixelRatio() const;
 
     void closeEvent(QCloseEvent* event) override;
 
@@ -130,11 +132,15 @@ public:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
 
+    bool event(QEvent* event) override;
+
     void focusOutEvent(QFocusEvent* event) override;
 
     void OnClientAreaResized(unsigned width, unsigned height);
 
     void InitRenderTarget();
+
+    void CaptureScreenshot(u16 res_scale, const QString& screenshot_path);
 
 public slots:
     void moveContext(); // overridden
@@ -146,8 +152,14 @@ public slots:
 signals:
     /// Emitted when the window is closed
     void Closed();
+    void FirstFrameDisplayed();
 
 private:
+    std::pair<unsigned, unsigned> ScaleTouch(const QPointF pos) const;
+    void TouchBeginEvent(const QTouchEvent* event);
+    void TouchUpdateEvent(const QTouchEvent* event);
+    void TouchEndEvent();
+
     void OnMinimalClientAreaChangeRequest(
         const std::pair<unsigned, unsigned>& minimal_size) override;
 
@@ -156,6 +168,11 @@ private:
     QByteArray geometry;
 
     EmuThread* emu_thread;
+
+    /// Temporary storage of the screenshot taken
+    QImage screenshot_image;
+
+    bool first_frame = false;
 
 protected:
     void showEvent(QShowEvent* event) override;

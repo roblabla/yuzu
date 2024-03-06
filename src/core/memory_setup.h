@@ -5,7 +5,7 @@
 #pragma once
 
 #include "common/common_types.h"
-#include "core/mmio.h"
+#include "core/memory_hook.h"
 
 namespace Memory {
 
@@ -26,7 +26,11 @@ void MapMemoryRegion(PageTable& page_table, VAddr base, u64 size, u8* target);
  * @param size The amount of bytes to map. Must be page-aligned.
  * @param mmio_handler The handler that backs the mapping.
  */
-void MapIoRegion(PageTable& page_table, VAddr base, u64 size, MMIORegionPointer mmio_handler);
+void MapIoRegion(PageTable& page_table, VAddr base, u64 size, MemoryHookPointer mmio_handler);
 
 void UnmapRegion(PageTable& page_table, VAddr base, u64 size);
-}
+
+void AddDebugHook(PageTable& page_table, VAddr base, u64 size, MemoryHookPointer hook);
+void RemoveDebugHook(PageTable& page_table, VAddr base, u64 size, MemoryHookPointer hook);
+
+} // namespace Memory

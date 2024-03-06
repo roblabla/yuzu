@@ -7,13 +7,16 @@
 #include <memory>
 #include <string>
 #include <tuple>
+#include <vector>
 #include "common/common_types.h"
-#include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/object.h"
 #include "core/hle/kernel/wait_object.h"
+#include "core/hle/result.h"
 
 namespace Kernel {
 
 class ClientPort;
+class KernelCore;
 class ServerSession;
 class SessionRequestHandler;
 
@@ -22,12 +25,13 @@ public:
     /**
      * Creates a pair of ServerPort and an associated ClientPort.
      *
+     * @param kernel The kernel instance to create the port pair under.
      * @param max_sessions Maximum number of sessions to the port
      * @param name Optional name of the ports
      * @return The created port tuple
      */
     static std::tuple<SharedPtr<ServerPort>, SharedPtr<ClientPort>> CreatePortPair(
-        u32 max_sessions, std::string name = "UnknownPort");
+        KernelCore& kernel, u32 max_sessions, std::string name = "UnknownPort");
 
     std::string GetTypeName() const override {
         return "ServerPort";
@@ -68,8 +72,8 @@ public:
     void Acquire(Thread* thread) override;
 
 private:
-    ServerPort();
+    explicit ServerPort(KernelCore& kernel);
     ~ServerPort() override;
 };
 
-} // namespace
+} // namespace Kernel

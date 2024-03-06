@@ -4,21 +4,73 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <string>
-#include "common/common_types.h"
-#include "core/loader/loader.h"
-#include "core/memory.h"
-#include "core/perf_stats.h"
-#include "core/telemetry_session.h"
 
+#include "common/common_types.h"
+#include "core/file_sys/vfs_types.h"
+#include "core/hle/kernel/object.h"
+
+namespace Core::Frontend {
 class EmuWindow;
-class ARM_Interface;
+class ProfileSelectApplet;
+class SoftwareKeyboardApplet;
+class WebBrowserApplet;
+} // namespace Core::Frontend
+
+namespace FileSys {
+class VfsFilesystem;
+} // namespace FileSys
+
+namespace Kernel {
+class KernelCore;
+class Process;
+class Scheduler;
+} // namespace Kernel
+
+namespace Loader {
+class AppLoader;
+enum class ResultStatus : u16;
+} // namespace Loader
+
+namespace Service::SM {
+class ServiceManager;
+} // namespace Service::SM
+
+namespace Tegra {
+class DebugContext;
+class GPU;
+} // namespace Tegra
+
+namespace VideoCore {
+class RendererBase;
+} // namespace VideoCore
 
 namespace Core {
 
+class ARM_Interface;
+class Cpu;
+class ExclusiveMonitor;
+class FrameLimiter;
+class PerfStats;
+class TelemetrySession;
+
+struct PerfStatsResults;
+
+FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
+                                         const std::string& path);
+
 class System {
 public:
+    System(const System&) = delete;
+    System& operator=(const System&) = delete;
+
+    System(System&&) = delete;
+    System& operator=(System&&) = delete;
+
+    ~System();
+
     /**
      * Gets the instance of the System singleton class.
      * @returns Reference to the instance of the System singleton class.
@@ -29,18 +81,15 @@ public:
 
     /// Enumeration representing the return values of the System Initialize and Load process.
     enum class ResultStatus : u32 {
-        Success,                    ///< Succeeded
-        ErrorNotInitialized,        ///< Error trying to use core prior to initialization
-        ErrorGetLoader,             ///< Error finding the correct application loader
-        ErrorSystemMode,            ///< Error determining the system mode
-        ErrorLoader,                ///< Error loading the specified application
-        ErrorLoader_ErrorEncrypted, ///< Error loading the specified application due to encryption
-        ErrorLoader_ErrorInvalidFormat, ///< Error loading the specified application due to an
-                                        /// invalid format
-        ErrorSystemFiles,               ///< Error in finding system files
-        ErrorSharedFont,                ///< Error in finding shared font
-        ErrorVideoCore,                 ///< Error in the video core
-        ErrorUnknown                    ///< Any other error
+        Success,             ///< Succeeded
+        ErrorNotInitialized, ///< Error trying to use core prior to initialization
+        ErrorGetLoader,      ///< Error finding the correct application loader
+        ErrorSystemMode,     ///< Error determining the system mode
+        ErrorSystemFiles,    ///< Error in finding system files
+        ErrorSharedFont,     ///< Error in finding shared font
+        ErrorVideoCore,      ///< Error in the video core
+        ErrorUnknown,        ///< Any other error
+        ErrorLoader,         ///< The base for loader errors (too many to repeat)
     };
 
     /**
@@ -50,112 +99,196 @@ public:
      * is not required to do a full dispatch with each instruction. NOTE: the number of instructions
      * requested is not guaranteed to run, as this will be interrupted preemptively if a hardware
      * update is requested (e.g. on a thread switch).
-     * @param tight_loop Number of instructions to execute.
-     * @return Result status, indicating whethor or not the operation succeeded.
+     * @param tight_loop If false, the CPU single-steps.
+     * @return Result status, indicating whether or not the operation succeeded.
      */
-    ResultStatus RunLoop(int tight_loop = 100000);
+    ResultStatus RunLoop(bool tight_loop = true);
 
     /**
      * Step the CPU one instruction
-     * @return Result status, indicating whethor or not the operation succeeded.
+     * @return Result status, indicating whether or not the operation succeeded.
      */
     ResultStatus SingleStep();
+
+    /**
+     * Invalidate the CPU instruction caches
+     * This function should only be used by GDB Stub to support breakpoints, memory updates and
+     * step/continue commands.
+     */
+    void InvalidateCpuInstructionCaches();
 
     /// Shutdown the emulated system.
     void Shutdown();
 
     /**
      * Load an executable application.
-     * @param emu_window Pointer to the host-system window used for video output and keyboard input.
+     * @param emu_window Reference to the host-system window used for video output and keyboard
+     *                   input.
      * @param filepath String path to the executable application to load on the host file system.
      * @returns ResultStatus code, indicating if the operation succeeded.
      */
-    ResultStatus Load(EmuWindow* emu_window, const std::string& filepath);
+    ResultStatus Load(Frontend::EmuWindow& emu_window, const std::string& filepath);
 
     /**
      * Indicates if the emulated system is powered on (all subsystems initialized and able to run an
      * application).
      * @returns True if the emulated system is powered on, otherwise false.
      */
-    bool IsPoweredOn() const {
-        return cpu_core != nullptr;
-    }
+    bool IsPoweredOn() const;
 
-    /**
-     * Returns a reference to the telemetry session for this emulation session.
-     * @returns Reference to the telemetry session.
-     */
-    Core::TelemetrySession& TelemetrySession() const {
-        return *telemetry_session;
-    }
+    /// Gets a reference to the telemetry session for this emulation session.
+    Core::TelemetrySession& TelemetrySession();
+
+    /// Gets a reference to the telemetry session for this emulation session.
+    const Core::TelemetrySession& TelemetrySession() const;
 
     /// Prepare the core emulation for a reschedule
     void PrepareReschedule();
 
-    PerfStats::Results GetAndResetPerfStats();
+    /// Gets and resets core performance statistics
+    PerfStatsResults GetAndResetPerfStats();
 
-    /**
-     * Gets a reference to the emulated CPU.
-     * @returns A reference to the emulated CPU.
-     */
-    ARM_Interface& CPU() {
-        return *cpu_core;
-    }
+    /// Gets an ARM interface to the CPU core that is currently running
+    ARM_Interface& CurrentArmInterface();
 
-    PerfStats perf_stats;
-    FrameLimiter frame_limiter;
+    /// Gets an ARM interface to the CPU core that is currently running
+    const ARM_Interface& CurrentArmInterface() const;
 
-    void SetStatus(ResultStatus new_status, const char* details = nullptr) {
-        status = new_status;
-        if (details) {
-            status_details = details;
-        }
-    }
+    /// Gets the index of the currently running CPU core
+    std::size_t CurrentCoreIndex() const;
 
-    const std::string& GetStatusDetails() const {
-        return status_details;
-    }
+    /// Gets the scheduler for the CPU core that is currently running
+    Kernel::Scheduler& CurrentScheduler();
 
-    Loader::AppLoader& GetAppLoader() const {
-        return *app_loader;
-    }
+    /// Gets the scheduler for the CPU core that is currently running
+    const Kernel::Scheduler& CurrentScheduler() const;
+
+    /// Gets a reference to an ARM interface for the CPU core with the specified index
+    ARM_Interface& ArmInterface(std::size_t core_index);
+
+    /// Gets a const reference to an ARM interface from the CPU core with the specified index
+    const ARM_Interface& ArmInterface(std::size_t core_index) const;
+
+    /// Gets a CPU interface to the CPU core with the specified index
+    Cpu& CpuCore(std::size_t core_index);
+
+    /// Gets a CPU interface to the CPU core with the specified index
+    const Cpu& CpuCore(std::size_t core_index) const;
+
+    /// Gets a reference to the exclusive monitor
+    ExclusiveMonitor& Monitor();
+
+    /// Gets a constant reference to the exclusive monitor
+    const ExclusiveMonitor& Monitor() const;
+
+    /// Gets a mutable reference to the GPU interface
+    Tegra::GPU& GPU();
+
+    /// Gets an immutable reference to the GPU interface.
+    const Tegra::GPU& GPU() const;
+
+    /// Gets a mutable reference to the renderer.
+    VideoCore::RendererBase& Renderer();
+
+    /// Gets an immutable reference to the renderer.
+    const VideoCore::RendererBase& Renderer() const;
+
+    /// Gets the scheduler for the CPU core with the specified index
+    Kernel::Scheduler& Scheduler(std::size_t core_index);
+
+    /// Gets the scheduler for the CPU core with the specified index
+    const Kernel::Scheduler& Scheduler(std::size_t core_index) const;
+
+    /// Provides a pointer to the current process
+    Kernel::Process* CurrentProcess();
+
+    /// Provides a constant pointer to the current process.
+    const Kernel::Process* CurrentProcess() const;
+
+    /// Provides a reference to the kernel instance.
+    Kernel::KernelCore& Kernel();
+
+    /// Provides a constant reference to the kernel instance.
+    const Kernel::KernelCore& Kernel() const;
+
+    /// Provides a reference to the internal PerfStats instance.
+    Core::PerfStats& GetPerfStats();
+
+    /// Provides a constant reference to the internal PerfStats instance.
+    const Core::PerfStats& GetPerfStats() const;
+
+    /// Provides a reference to the frame limiter;
+    Core::FrameLimiter& FrameLimiter();
+
+    /// Provides a constant referent to the frame limiter
+    const Core::FrameLimiter& FrameLimiter() const;
+
+    /// Gets the name of the current game
+    Loader::ResultStatus GetGameName(std::string& out) const;
+
+    void SetStatus(ResultStatus new_status, const char* details);
+
+    const std::string& GetStatusDetails() const;
+
+    Loader::AppLoader& GetAppLoader() const;
+
+    Service::SM::ServiceManager& ServiceManager();
+    const Service::SM::ServiceManager& ServiceManager() const;
+
+    void SetGPUDebugContext(std::shared_ptr<Tegra::DebugContext> context);
+
+    Tegra::DebugContext* GetGPUDebugContext() const;
+
+    void SetFilesystem(std::shared_ptr<FileSys::VfsFilesystem> vfs);
+
+    std::shared_ptr<FileSys::VfsFilesystem> GetFilesystem() const;
+
+    void SetProfileSelector(std::unique_ptr<Frontend::ProfileSelectApplet> applet);
+
+    const Frontend::ProfileSelectApplet& GetProfileSelector() const;
+
+    void SetSoftwareKeyboard(std::unique_ptr<Frontend::SoftwareKeyboardApplet> applet);
+
+    const Frontend::SoftwareKeyboardApplet& GetSoftwareKeyboard() const;
+
+    void SetWebBrowser(std::unique_ptr<Frontend::WebBrowserApplet> applet);
+
+    Frontend::WebBrowserApplet& GetWebBrowser();
+    const Frontend::WebBrowserApplet& GetWebBrowser() const;
 
 private:
+    System();
+
+    /// Returns the currently running CPU core
+    Cpu& CurrentCpuCore();
+
+    /// Returns the currently running CPU core
+    const Cpu& CurrentCpuCore() const;
+
     /**
      * Initialize the emulated system.
-     * @param emu_window Pointer to the host-system window used for video output and keyboard input.
-     * @param system_mode The system mode.
+     * @param emu_window Reference to the host-system window used for video output and keyboard
+     *                   input.
      * @return ResultStatus code, indicating if the operation succeeded.
      */
-    ResultStatus Init(EmuWindow* emu_window, u32 system_mode);
+    ResultStatus Init(Frontend::EmuWindow& emu_window);
 
-    /// Reschedule the core emulation
-    void Reschedule();
-
-    /// AppLoader used to load the current executing application
-    std::unique_ptr<Loader::AppLoader> app_loader;
-
-    ///< ARM11 CPU core
-    std::unique_ptr<ARM_Interface> cpu_core;
-
-    /// When true, signals that a reschedule should happen
-    bool reschedule_pending{};
-
-    /// Telemetry session for this emulation session
-    std::unique_ptr<Core::TelemetrySession> telemetry_session;
+    struct Impl;
+    std::unique_ptr<Impl> impl;
 
     static System s_instance;
-
-    ResultStatus status = ResultStatus::Success;
-    std::string status_details = "";
 };
 
-inline ARM_Interface& CPU() {
-    return System::GetInstance().CPU();
+inline ARM_Interface& CurrentArmInterface() {
+    return System::GetInstance().CurrentArmInterface();
 }
 
 inline TelemetrySession& Telemetry() {
     return System::GetInstance().TelemetrySession();
+}
+
+inline Kernel::Process* CurrentProcess() {
+    return System::GetInstance().CurrentProcess();
 }
 
 } // namespace Core

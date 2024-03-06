@@ -54,7 +54,7 @@ static CPUCaps Detect() {
     caps.num_cores = std::thread::hardware_concurrency();
 
     // Assumes the CPU supports the CPUID instruction. Those that don't would likely not support
-    // Citra at all anyway
+    // yuzu at all anyway
 
     int cpu_id[4];
     memset(caps.brand_string, 0, sizeof(caps.brand_string));

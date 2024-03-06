@@ -1,21 +1,18 @@
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_SOURCE_DIR}/CMakeModules)
 
-set(SRCS
-            emu_window/emu_window_sdl2.cpp
-            config.cpp
-            yuzu.cpp
-            yuzu.rc
-            )
-set(HEADERS
-            emu_window/emu_window_sdl2.h
-            config.h
-            default_ini.h
-            resource.h
-            )
+add_executable(yuzu-cmd
+    config.cpp
+    config.h
+    default_ini.h
+    emu_window/emu_window_sdl2.cpp
+    emu_window/emu_window_sdl2.h
+    resource.h
+    yuzu.cpp
+    yuzu.rc
+)
 
-create_directory_groups(${SRCS} ${HEADERS})
+create_target_directory_groups(yuzu-cmd)
 
-add_executable(yuzu-cmd ${SRCS} ${HEADERS})
 target_link_libraries(yuzu-cmd PRIVATE common core input_common)
 target_link_libraries(yuzu-cmd PRIVATE inih glad)
 if (MSVC)

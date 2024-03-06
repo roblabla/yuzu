@@ -6,17 +6,18 @@
 
 #include <memory>
 #include <string>
-#include "common/assert.h"
-#include "common/common_types.h"
-#include "core/hle/kernel/kernel.h"
+#include <vector>
+
+#include "core/hle/kernel/object.h"
 #include "core/hle/kernel/wait_object.h"
 #include "core/hle/result.h"
-#include "core/memory.h"
 
 namespace Kernel {
 
-class ClientSession;
 class ClientPort;
+class ClientSession;
+class HLERequestContext;
+class KernelCore;
 class ServerSession;
 class Session;
 class SessionRequestHandler;
@@ -49,11 +50,12 @@ public:
 
     /**
      * Creates a pair of ServerSession and an associated ClientSession.
+     * @param kernel      The kernal instance to create the session pair under.
      * @param name        Optional name of the ports.
      * @param client_port Optional The ClientPort that spawned this session.
      * @return The created session tuple
      */
-    static SessionPair CreateSessionPair(const std::string& name = "Unknown",
+    static SessionPair CreateSessionPair(KernelCore& kernel, const std::string& name = "Unknown",
                                          SharedPtr<ClientPort> client_port = nullptr);
 
     /**
@@ -79,7 +81,10 @@ public:
     std::string name;                ///< The name of this session (optional)
     std::shared_ptr<Session> parent; ///< The parent session, which links to the client endpoint.
     std::shared_ptr<SessionRequestHandler>
-        hle_handler; ///< This session's HLE request handler (optional)
+        hle_handler; ///< This session's HLE request handler (applicable when not a domain)
+
+    /// This is the list of domain request handlers (after conversion to a domain)
+    std::vector<std::shared_ptr<SessionRequestHandler>> domain_request_handlers;
 
     /// List of threads that are pending a response after a sync request. This list is processed in
     /// a LIFO manner, thus, the last request will be dispatched first.
@@ -91,26 +96,41 @@ public:
     /// TODO(Subv): Find a better name for this.
     SharedPtr<Thread> currently_handling;
 
+    /// Returns true if the session has been converted to a domain, otherwise False
+    bool IsDomain() const {
+        return !IsSession();
+    }
+
+    /// Returns true if this session has not been converted to a domain, otherwise false.
+    bool IsSession() const {
+        return domain_request_handlers.empty();
+    }
+
+    /// Converts the session to a domain at the end of the current command
+    void ConvertToDomain() {
+        convert_to_domain = true;
+    }
+
 private:
-    ServerSession();
+    explicit ServerSession(KernelCore& kernel);
     ~ServerSession() override;
 
     /**
      * Creates a server session. The server session can have an optional HLE handler,
      * which will be invoked to handle the IPC requests that this session receives.
+     * @param kernel The kernel instance to create this server session under.
      * @param name Optional name of the server session.
      * @return The created server session
      */
-    static ResultVal<SharedPtr<ServerSession>> Create(std::string name = "Unknown");
+    static ResultVal<SharedPtr<ServerSession>> Create(KernelCore& kernel,
+                                                      std::string name = "Unknown");
+
+    /// Handles a SyncRequest to a domain, forwarding the request to the proper object or closing an
+    /// object handle.
+    ResultCode HandleDomainSyncRequest(Kernel::HLERequestContext& context);
+
+    /// When set to True, converts the session to a domain at the end of the command
+    bool convert_to_domain{};
 };
 
-/**
- * Performs command buffer translation for an HLE IPC request.
- * The command buffer from the ServerSession thread's TLS is copied into a
- * buffer and all descriptors in the buffer are processed.
- * TODO(Subv): Implement this function, currently we do not support multiple processes running at
- * once, but once that is implemented we'll need to properly translate all descriptors
- * in the command buffer.
- */
-ResultCode TranslateHLERequest(ServerSession* server_session);
-}
+} // namespace Kernel

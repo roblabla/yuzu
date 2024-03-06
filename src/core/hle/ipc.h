@@ -12,13 +12,7 @@
 namespace IPC {
 
 /// Size of the command buffer area, in 32-bit words.
-constexpr size_t COMMAND_BUFFER_LENGTH = 0x100 / sizeof(u32);
-
-// These errors are commonly returned by invalid IPC translations, so alias them here for
-// convenience.
-// TODO(yuriks): These will probably go away once translation is implemented inside the kernel.
-constexpr auto ERR_INVALID_HANDLE = Kernel::ERR_INVALID_HANDLE_OS;
-
+constexpr std::size_t COMMAND_BUFFER_LENGTH = 0x100 / sizeof(u32);
 
 enum class ControlCommand : u32 {
     ConvertSessionToDomain = 0,
@@ -30,9 +24,14 @@ enum class ControlCommand : u32 {
 };
 
 enum class CommandType : u32 {
+    Invalid = 0,
+    LegacyRequest = 1,
     Close = 2,
+    LegacyControl = 3,
     Request = 4,
     Control = 5,
+    RequestWithContext = 6,
+    ControlWithContext = 7,
     Unspecified,
 };
 
@@ -81,16 +80,20 @@ struct BufferDescriptorX {
     u32_le address_bits_0_31;
 
     u32_le Counter() const {
-        u32_le counter{ counter_bits_0_5 };
+        u32_le counter{counter_bits_0_5};
         counter |= counter_bits_9_11 << 9;
         return counter;
     }
 
     VAddr Address() const {
-        VAddr address{ address_bits_0_31 };
+        VAddr address{address_bits_0_31};
         address |= static_cast<VAddr>(address_bits_32_35) << 32;
         address |= static_cast<VAddr>(address_bits_36_38) << 36;
         return address;
+    }
+
+    u64 Size() const {
+        return static_cast<u64>(size);
     }
 };
 static_assert(sizeof(BufferDescriptorX) == 8, "BufferDescriptorX size is incorrect");
@@ -107,14 +110,14 @@ struct BufferDescriptorABW {
     };
 
     VAddr Address() const {
-        VAddr address{ address_bits_0_31 };
+        VAddr address{address_bits_0_31};
         address |= static_cast<VAddr>(address_bits_32_35) << 32;
         address |= static_cast<VAddr>(address_bits_36_38) << 36;
         return address;
     }
 
     u64 Size() const {
-        u64 size{ size_bits_0_31 };
+        u64 size{size_bits_0_31};
         size |= static_cast<u64>(size_bits_32_35) << 32;
         return size;
     }
@@ -130,9 +133,13 @@ struct BufferDescriptorC {
     };
 
     VAddr Address() const {
-        VAddr address{ address_bits_0_31 };
+        VAddr address{address_bits_0_31};
         address |= static_cast<VAddr>(address_bits_32_47) << 32;
         return address;
+    }
+
+    u64 Size() const {
+        return static_cast<u64>(size);
     }
 };
 static_assert(sizeof(BufferDescriptorC) == 8, "BufferDescriptorC size is incorrect");
@@ -141,9 +148,14 @@ struct DataPayloadHeader {
     u32_le magic;
     INSERT_PADDING_WORDS(1);
 };
-static_assert(sizeof(DataPayloadHeader) == 8, "DataPayloadRequest size is incorrect");
+static_assert(sizeof(DataPayloadHeader) == 8, "DataPayloadHeader size is incorrect");
 
 struct DomainMessageHeader {
+    enum class CommandType : u32_le {
+        SendMessage = 1,
+        CloseVirtualHandle = 2,
+    };
+
     union {
         // Used when responding to an IPC request, Server -> Client.
         struct {
@@ -154,7 +166,8 @@ struct DomainMessageHeader {
         // Used when performing an IPC request, Client -> Server.
         struct {
             union {
-                BitField<0, 8, u32_le> command;
+                BitField<0, 8, CommandType> command;
+                BitField<8, 8, u32_le> input_object_count;
                 BitField<16, 16, u32_le> size;
             };
             u32_le object_id;

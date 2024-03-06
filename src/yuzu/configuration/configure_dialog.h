@@ -7,6 +7,8 @@
 #include <memory>
 #include <QDialog>
 
+class HotkeyRegistry;
+
 namespace Ui {
 class ConfigureDialog;
 }
@@ -15,14 +17,15 @@ class ConfigureDialog : public QDialog {
     Q_OBJECT
 
 public:
-    explicit ConfigureDialog(QWidget* parent);
-    ~ConfigureDialog();
+    explicit ConfigureDialog(QWidget* parent, const HotkeyRegistry& registry);
+    ~ConfigureDialog() override;
 
     void applyConfiguration();
 
 private:
     void setConfiguration();
+    void UpdateVisibleTabs();
+    void PopulateSelectionList();
 
-private:
     std::unique_ptr<Ui::ConfigureDialog> ui;
 };

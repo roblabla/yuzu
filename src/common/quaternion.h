@@ -12,7 +12,7 @@ template <typename T>
 class Quaternion {
 public:
     Math::Vec3<T> xyz;
-    T w;
+    T w{};
 
     Quaternion<decltype(-T{})> Inverse() const {
         return {-xyz, w};
@@ -46,4 +46,4 @@ inline Quaternion<float> MakeQuaternion(const Math::Vec3<float>& axis, float ang
     return {axis * std::sin(angle / 2), std::cos(angle / 2)};
 }
 
-} // namspace Math
+} // namespace Math

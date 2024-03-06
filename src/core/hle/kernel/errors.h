@@ -8,52 +8,30 @@
 
 namespace Kernel {
 
-namespace ErrCodes {
-enum {
-    // TODO(Subv): Remove these 3DS OS error codes.
-    OutOfHandles = 19,
-    SessionClosedByRemote = 26,
-    PortNameTooLong = 30,
-    NoPendingSessions = 35,
-    WrongPermission = 46,
-    InvalidBufferDescriptor = 48,
-    MaxConnectionsReached = 52,
+// Confirmed Switch kernel error codes
 
-    // Confirmed Switch OS error codes
-    InvalidHandle = 114,
-    Timeout = 117,
-    SynchronizationCanceled = 118,
-    TooLarge = 119,
-};
-}
-
-// WARNING: The kernel is quite inconsistent in it's usage of errors code. Make sure to always
-// double check that the code matches before re-using the constant.
-
-// TODO(bunnei): Replace these with correct errors for Switch OS
-constexpr ResultCode ERR_OUT_OF_HANDLES(-1);
-constexpr ResultCode ERR_SESSION_CLOSED_BY_REMOTE(-1);
-constexpr ResultCode ERR_PORT_NAME_TOO_LONG(-1);
-constexpr ResultCode ERR_WRONG_PERMISSION(-1);
-constexpr ResultCode ERR_MAX_CONNECTIONS_REACHED(-1);
-constexpr ResultCode ERR_INVALID_ENUM_VALUE(-1);
-constexpr ResultCode ERR_INVALID_ENUM_VALUE_FND(-1);
-constexpr ResultCode ERR_INVALID_COMBINATION(-1);
-constexpr ResultCode ERR_INVALID_COMBINATION_KERNEL(-1);
-constexpr ResultCode ERR_OUT_OF_MEMORY(-1);
-constexpr ResultCode ERR_INVALID_ADDRESS(-1);
-constexpr ResultCode ERR_INVALID_ADDRESS_STATE(-1);
-constexpr ResultCode ERR_INVALID_HANDLE(ErrorModule::Kernel, ErrCodes::InvalidHandle);
-constexpr ResultCode ERR_INVALID_POINTER(-1);
-constexpr ResultCode ERR_INVALID_OBJECT_ADDR(-1);
-constexpr ResultCode ERR_NOT_AUTHORIZED(-1);
-/// Alternate code returned instead of ERR_INVALID_HANDLE in some code paths.
-constexpr ResultCode ERR_INVALID_HANDLE_OS(-1);
-constexpr ResultCode ERR_NOT_FOUND(-1);
-constexpr ResultCode ERR_OUT_OF_RANGE(-1);
-constexpr ResultCode ERR_OUT_OF_RANGE_KERNEL(-1);
-constexpr ResultCode RESULT_TIMEOUT(ErrorModule::Kernel, ErrCodes::Timeout);
-/// Returned when Accept() is called on a port with no sessions to be accepted.
-constexpr ResultCode ERR_NO_PENDING_SESSIONS(-1);
+constexpr ResultCode ERR_MAX_CONNECTIONS_REACHED{ErrorModule::Kernel, 7};
+constexpr ResultCode ERR_INVALID_CAPABILITY_DESCRIPTOR{ErrorModule::Kernel, 14};
+constexpr ResultCode ERR_INVALID_SIZE{ErrorModule::Kernel, 101};
+constexpr ResultCode ERR_INVALID_ADDRESS{ErrorModule::Kernel, 102};
+constexpr ResultCode ERR_HANDLE_TABLE_FULL{ErrorModule::Kernel, 105};
+constexpr ResultCode ERR_INVALID_ADDRESS_STATE{ErrorModule::Kernel, 106};
+constexpr ResultCode ERR_INVALID_MEMORY_PERMISSIONS{ErrorModule::Kernel, 108};
+constexpr ResultCode ERR_INVALID_MEMORY_RANGE{ErrorModule::Kernel, 110};
+constexpr ResultCode ERR_INVALID_PROCESSOR_ID{ErrorModule::Kernel, 113};
+constexpr ResultCode ERR_INVALID_THREAD_PRIORITY{ErrorModule::Kernel, 112};
+constexpr ResultCode ERR_INVALID_HANDLE{ErrorModule::Kernel, 114};
+constexpr ResultCode ERR_INVALID_POINTER{ErrorModule::Kernel, 115};
+constexpr ResultCode ERR_INVALID_COMBINATION{ErrorModule::Kernel, 116};
+constexpr ResultCode RESULT_TIMEOUT{ErrorModule::Kernel, 117};
+constexpr ResultCode ERR_SYNCHRONIZATION_CANCELED{ErrorModule::Kernel, 118};
+constexpr ResultCode ERR_OUT_OF_RANGE{ErrorModule::Kernel, 119};
+constexpr ResultCode ERR_INVALID_ENUM_VALUE{ErrorModule::Kernel, 120};
+constexpr ResultCode ERR_NOT_FOUND{ErrorModule::Kernel, 121};
+constexpr ResultCode ERR_BUSY{ErrorModule::Kernel, 122};
+constexpr ResultCode ERR_SESSION_CLOSED_BY_REMOTE{ErrorModule::Kernel, 123};
+constexpr ResultCode ERR_INVALID_STATE{ErrorModule::Kernel, 125};
+constexpr ResultCode ERR_RESERVED_VALUE{ErrorModule::Kernel, 126};
+constexpr ResultCode ERR_RESOURCE_LIMIT_EXCEEDED{ErrorModule::Kernel, 132};
 
 } // namespace Kernel

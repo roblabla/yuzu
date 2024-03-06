@@ -2,18 +2,25 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#pragma once
+
 #include <tuple>
 #include <unordered_map>
 #include <vector>
 
 #include "common/common_types.h"
-#include "core/mmio.h"
+#include "core/hle/kernel/kernel.h"
+#include "core/memory_hook.h"
+
+namespace Memory {
+struct PageTable;
+}
 
 namespace ArmTests {
 
 struct WriteRecord {
-    WriteRecord(size_t size, VAddr addr, u64 data) : size(size), addr(addr), data(data) {}
-    size_t size;
+    WriteRecord(std::size_t size, VAddr addr, u64 data) : size(size), addr(addr), data(data) {}
+    std::size_t size;
     VAddr addr;
     u64 data;
     bool operator==(const WriteRecord& o) const {
@@ -51,27 +58,27 @@ public:
 
 private:
     friend struct TestMemory;
-    struct TestMemory final : Memory::MMIORegion {
+    struct TestMemory final : Memory::MemoryHook {
         explicit TestMemory(TestEnvironment* env_) : env(env_) {}
         TestEnvironment* env;
 
         ~TestMemory() override;
 
-        bool IsValidAddress(VAddr addr) override;
+        std::optional<bool> IsValidAddress(VAddr addr) override;
 
-        u8 Read8(VAddr addr) override;
-        u16 Read16(VAddr addr) override;
-        u32 Read32(VAddr addr) override;
-        u64 Read64(VAddr addr) override;
+        std::optional<u8> Read8(VAddr addr) override;
+        std::optional<u16> Read16(VAddr addr) override;
+        std::optional<u32> Read32(VAddr addr) override;
+        std::optional<u64> Read64(VAddr addr) override;
 
-        bool ReadBlock(VAddr src_addr, void* dest_buffer, size_t size) override;
+        bool ReadBlock(VAddr src_addr, void* dest_buffer, std::size_t size) override;
 
-        void Write8(VAddr addr, u8 data) override;
-        void Write16(VAddr addr, u16 data) override;
-        void Write32(VAddr addr, u32 data) override;
-        void Write64(VAddr addr, u64 data) override;
+        bool Write8(VAddr addr, u8 data) override;
+        bool Write16(VAddr addr, u16 data) override;
+        bool Write32(VAddr addr, u32 data) override;
+        bool Write64(VAddr addr, u64 data) override;
 
-        bool WriteBlock(VAddr dest_addr, const void* src_buffer, size_t size) override;
+        bool WriteBlock(VAddr dest_addr, const void* src_buffer, std::size_t size) override;
 
         std::unordered_map<VAddr, u8> data;
     };
@@ -79,6 +86,8 @@ private:
     bool mutable_memory;
     std::shared_ptr<TestMemory> test_memory;
     std::vector<WriteRecord> write_records;
+    Memory::PageTable* page_table = nullptr;
+    Kernel::KernelCore kernel;
 };
 
 } // namespace ArmTests

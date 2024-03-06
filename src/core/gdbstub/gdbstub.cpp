@@ -32,109 +32,136 @@
 
 #include "common/logging/log.h"
 #include "common/string_util.h"
+#include "common/swap.h"
 #include "core/arm/arm_interface.h"
 #include "core/core.h"
+#include "core/core_cpu.h"
 #include "core/gdbstub/gdbstub.h"
+#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/scheduler.h"
+#include "core/hle/kernel/vm_manager.h"
 #include "core/loader/loader.h"
 #include "core/memory.h"
 
-const int GDB_BUFFER_SIZE = 10000;
+namespace GDBStub {
+namespace {
+constexpr int GDB_BUFFER_SIZE = 10000;
 
-const char GDB_STUB_START = '$';
-const char GDB_STUB_END = '#';
-const char GDB_STUB_ACK = '+';
-const char GDB_STUB_NACK = '-';
+constexpr char GDB_STUB_START = '$';
+constexpr char GDB_STUB_END = '#';
+constexpr char GDB_STUB_ACK = '+';
+constexpr char GDB_STUB_NACK = '-';
 
 #ifndef SIGTRAP
-const u32 SIGTRAP = 5;
+constexpr u32 SIGTRAP = 5;
 #endif
 
 #ifndef SIGTERM
-const u32 SIGTERM = 15;
+constexpr u32 SIGTERM = 15;
 #endif
 
 #ifndef MSG_WAITALL
-const u32 MSG_WAITALL = 8;
+constexpr u32 MSG_WAITALL = 8;
 #endif
 
-const u32 R15_REGISTER = 15;
-const u32 CPSR_REGISTER = 25;
-const u32 FPSCR_REGISTER = 58;
+constexpr u32 LR_REGISTER = 30;
+constexpr u32 SP_REGISTER = 31;
+constexpr u32 PC_REGISTER = 32;
+constexpr u32 PSTATE_REGISTER = 33;
+constexpr u32 UC_ARM64_REG_Q0 = 34;
+constexpr u32 FPCR_REGISTER = 66;
 
 // For sample XML files see the GDB source /gdb/features
 // GDB also wants the l character at the start
 // This XML defines what the registers are for this specific ARM device
-static const char* target_xml =
+constexpr char target_xml[] =
     R"(l<?xml version="1.0"?>
 <!DOCTYPE target SYSTEM "gdb-target.dtd">
 <target version="1.0">
-  <feature name="org.gnu.gdb.arm.core">
-    <reg name="r0" bitsize="32"/>
-    <reg name="r1" bitsize="32"/>
-    <reg name="r2" bitsize="32"/>
-    <reg name="r3" bitsize="32"/>
-    <reg name="r4" bitsize="32"/>
-    <reg name="r5" bitsize="32"/>
-    <reg name="r6" bitsize="32"/>
-    <reg name="r7" bitsize="32"/>
-    <reg name="r8" bitsize="32"/>
-    <reg name="r9" bitsize="32"/>
-    <reg name="r10" bitsize="32"/>
-    <reg name="r11" bitsize="32"/>
-    <reg name="r12" bitsize="32"/>
-    <reg name="sp" bitsize="32" type="data_ptr"/>
-    <reg name="lr" bitsize="32"/>
-    <reg name="pc" bitsize="32" type="code_ptr"/>
+  <feature name="org.gnu.gdb.aarch64.core">
+    <reg name="x0" bitsize="64"/>
+    <reg name="x1" bitsize="64"/>
+    <reg name="x2" bitsize="64"/>
+    <reg name="x3" bitsize="64"/>
+    <reg name="x4" bitsize="64"/>
+    <reg name="x5" bitsize="64"/>
+    <reg name="x6" bitsize="64"/>
+    <reg name="x7" bitsize="64"/>
+    <reg name="x8" bitsize="64"/>
+    <reg name="x9" bitsize="64"/>
+    <reg name="x10" bitsize="64"/>
+    <reg name="x11" bitsize="64"/>
+    <reg name="x12" bitsize="64"/>
+    <reg name="x13" bitsize="64"/>
+    <reg name="x14" bitsize="64"/>
+    <reg name="x15" bitsize="64"/>
+    <reg name="x16" bitsize="64"/>
+    <reg name="x17" bitsize="64"/>
+    <reg name="x18" bitsize="64"/>
+    <reg name="x19" bitsize="64"/>
+    <reg name="x20" bitsize="64"/>
+    <reg name="x21" bitsize="64"/>
+    <reg name="x22" bitsize="64"/>
+    <reg name="x23" bitsize="64"/>
+    <reg name="x24" bitsize="64"/>
+    <reg name="x25" bitsize="64"/>
+    <reg name="x26" bitsize="64"/>
+    <reg name="x27" bitsize="64"/>
+    <reg name="x28" bitsize="64"/>
+    <reg name="x29" bitsize="64"/>
+    <reg name="x30" bitsize="64"/>
+    <reg name="sp" bitsize="64" type="data_ptr"/>
 
-    <!-- The CPSR is register 25, rather than register 16, because
-         the FPA registers historically were placed between the PC
-         and the CPSR in the "g" packet.  -->
+    <reg name="pc" bitsize="64" type="code_ptr"/>
 
-    <reg name="cpsr" bitsize="32" regnum="25"/>
+    <flags id="pstate_flags" size="4">
+      <field name="SP" start="0" end="0"/>
+      <field name="" start="1" end="1"/>
+      <field name="EL" start="2" end="3"/>
+      <field name="nRW" start="4" end="4"/>
+      <field name="" start="5" end="5"/>
+      <field name="F" start="6" end="6"/>
+      <field name="I" start="7" end="7"/>
+      <field name="A" start="8" end="8"/>
+      <field name="D" start="9" end="9"/>
+
+      <field name="IL" start="20" end="20"/>
+      <field name="SS" start="21" end="21"/>
+
+      <field name="V" start="28" end="28"/>
+      <field name="C" start="29" end="29"/>
+      <field name="Z" start="30" end="30"/>
+      <field name="N" start="31" end="31"/>
+    </flags>
+    <reg name="pstate" bitsize="32" type="pstate_flags"/>
   </feature>
-  <feature name="org.gnu.gdb.arm.vfp">
-    <reg name="d0" bitsize="64" type="float"/>
-    <reg name="d1" bitsize="64" type="float"/>
-    <reg name="d2" bitsize="64" type="float"/>
-    <reg name="d3" bitsize="64" type="float"/>
-    <reg name="d4" bitsize="64" type="float"/>
-    <reg name="d5" bitsize="64" type="float"/>
-    <reg name="d6" bitsize="64" type="float"/>
-    <reg name="d7" bitsize="64" type="float"/>
-    <reg name="d8" bitsize="64" type="float"/>
-    <reg name="d9" bitsize="64" type="float"/>
-    <reg name="d10" bitsize="64" type="float"/>
-    <reg name="d11" bitsize="64" type="float"/>
-    <reg name="d12" bitsize="64" type="float"/>
-    <reg name="d13" bitsize="64" type="float"/>
-    <reg name="d14" bitsize="64" type="float"/>
-    <reg name="d15" bitsize="64" type="float"/>
-    <reg name="fpscr" bitsize="32" type="int" group="float"/>
+  <feature name="org.gnu.gdb.aarch64.fpu">
   </feature>
 </target>
 )";
 
-namespace GDBStub {
+int gdbserver_socket = -1;
 
-static int gdbserver_socket = -1;
+u8 command_buffer[GDB_BUFFER_SIZE];
+u32 command_length;
 
-static u8 command_buffer[GDB_BUFFER_SIZE];
-static u32 command_length;
+u32 latest_signal = 0;
+bool memory_break = false;
 
-static u32 latest_signal = 0;
-static bool step_break = false;
-static bool memory_break = false;
+Kernel::Thread* current_thread = nullptr;
+u32 current_core = 0;
 
 // Binding to a port within the reserved ports range (0-1023) requires root permissions,
 // so default to a port outside of that range.
-static u16 gdbstub_port = 24689;
+u16 gdbstub_port = 24689;
 
-static bool halt_loop = true;
-static bool step_loop = false;
+bool halt_loop = true;
+bool step_loop = false;
+bool send_trap = false;
 
 // If set to false, the server will never be started and no
 // gdbstub-related functions will be executed.
-static std::atomic<bool> server_enabled(false);
+std::atomic<bool> server_enabled(false);
 
 #ifdef _WIN32
 WSADATA InitData;
@@ -142,13 +169,122 @@ WSADATA InitData;
 
 struct Breakpoint {
     bool active;
-    PAddr addr;
-    u32 len;
+    VAddr addr;
+    u64 len;
+    std::array<u8, 4> inst;
 };
 
-static std::map<u32, Breakpoint> breakpoints_execute;
-static std::map<u32, Breakpoint> breakpoints_read;
-static std::map<u32, Breakpoint> breakpoints_write;
+using BreakpointMap = std::map<VAddr, Breakpoint>;
+BreakpointMap breakpoints_execute;
+BreakpointMap breakpoints_read;
+BreakpointMap breakpoints_write;
+
+struct Module {
+    std::string name;
+    VAddr beg;
+    VAddr end;
+};
+
+std::vector<Module> modules;
+} // Anonymous namespace
+
+void RegisterModule(std::string name, VAddr beg, VAddr end, bool add_elf_ext) {
+    Module module;
+    if (add_elf_ext) {
+        Common::SplitPath(name, nullptr, &module.name, nullptr);
+        module.name += ".elf";
+    } else {
+        module.name = std::move(name);
+    }
+    module.beg = beg;
+    module.end = end;
+    modules.push_back(std::move(module));
+}
+
+static Kernel::Thread* FindThreadById(s64 id) {
+    for (u32 core = 0; core < Core::NUM_CPU_CORES; core++) {
+        const auto& threads = Core::System::GetInstance().Scheduler(core).GetThreadList();
+        for (auto& thread : threads) {
+            if (thread->GetThreadID() == static_cast<u64>(id)) {
+                current_core = core;
+                return thread.get();
+            }
+        }
+    }
+    return nullptr;
+}
+
+static u64 RegRead(std::size_t id, Kernel::Thread* thread = nullptr) {
+    if (!thread) {
+        return 0;
+    }
+
+    const auto& thread_context = thread->GetContext();
+
+    if (id < SP_REGISTER) {
+        return thread_context.cpu_registers[id];
+    } else if (id == SP_REGISTER) {
+        return thread_context.sp;
+    } else if (id == PC_REGISTER) {
+        return thread_context.pc;
+    } else if (id == PSTATE_REGISTER) {
+        return thread_context.pstate;
+    } else if (id > PSTATE_REGISTER && id < FPCR_REGISTER) {
+        return thread_context.vector_registers[id - UC_ARM64_REG_Q0][0];
+    } else {
+        return 0;
+    }
+}
+
+static void RegWrite(std::size_t id, u64 val, Kernel::Thread* thread = nullptr) {
+    if (!thread) {
+        return;
+    }
+
+    auto& thread_context = thread->GetContext();
+
+    if (id < SP_REGISTER) {
+        thread_context.cpu_registers[id] = val;
+    } else if (id == SP_REGISTER) {
+        thread_context.sp = val;
+    } else if (id == PC_REGISTER) {
+        thread_context.pc = val;
+    } else if (id == PSTATE_REGISTER) {
+        thread_context.pstate = static_cast<u32>(val);
+    } else if (id > PSTATE_REGISTER && id < FPCR_REGISTER) {
+        thread_context.vector_registers[id - (PSTATE_REGISTER + 1)][0] = val;
+    }
+}
+
+static u128 FpuRead(std::size_t id, Kernel::Thread* thread = nullptr) {
+    if (!thread) {
+        return u128{0};
+    }
+
+    auto& thread_context = thread->GetContext();
+
+    if (id >= UC_ARM64_REG_Q0 && id < FPCR_REGISTER) {
+        return thread_context.vector_registers[id - UC_ARM64_REG_Q0];
+    } else if (id == FPCR_REGISTER) {
+        return u128{thread_context.fpcr, 0};
+    } else {
+        return u128{0};
+    }
+}
+
+static void FpuWrite(std::size_t id, u128 val, Kernel::Thread* thread = nullptr) {
+    if (!thread) {
+        return;
+    }
+
+    auto& thread_context = thread->GetContext();
+
+    if (id >= UC_ARM64_REG_Q0 && id < FPCR_REGISTER) {
+        thread_context.vector_registers[id - UC_ARM64_REG_Q0] = val;
+    } else if (id == FPCR_REGISTER) {
+        thread_context.fpcr = static_cast<u32>(val[0]);
+    }
+}
 
 /**
  * Turns hex string character into the equivalent byte.
@@ -164,7 +300,7 @@ static u8 HexCharToValue(u8 hex) {
         return hex - 'A' + 0xA;
     }
 
-    LOG_ERROR(Debug_GDBStub, "Invalid nibble: %c (%02x)\n", hex, hex);
+    LOG_ERROR(Debug_GDBStub, "Invalid nibble: {} ({:02X})", hex, hex);
     return 0;
 }
 
@@ -178,18 +314,33 @@ static u8 NibbleToHex(u8 n) {
     if (n < 0xA) {
         return '0' + n;
     } else {
-        return 'A' + n - 0xA;
+        return 'a' + n - 0xA;
     }
 }
 
 /**
-* Converts input hex string characters into an array of equivalent of u8 bytes.
-*
-* @param src Pointer to array of output hex string characters.
-* @param len Length of src array.
-*/
-static u32 HexToInt(const u8* src, size_t len) {
+ * Converts input hex string characters into an array of equivalent of u8 bytes.
+ *
+ * @param src Pointer to array of output hex string characters.
+ * @param len Length of src array.
+ */
+static u32 HexToInt(const u8* src, std::size_t len) {
     u32 output = 0;
+    while (len-- > 0) {
+        output = (output << 4) | HexCharToValue(src[0]);
+        src++;
+    }
+    return output;
+}
+
+/**
+ * Converts input hex string characters into an array of equivalent of u8 bytes.
+ *
+ * @param src Pointer to array of output hex string characters.
+ * @param len Length of src array.
+ */
+static u64 HexToLong(const u8* src, std::size_t len) {
+    u64 output = 0;
     while (len-- > 0) {
         output = (output << 4) | HexCharToValue(src[0]);
         src++;
@@ -204,7 +355,7 @@ static u32 HexToInt(const u8* src, size_t len) {
  * @param src Pointer to array of u8 bytes.
  * @param len Length of src array.
  */
-static void MemToGdbHex(u8* dest, const u8* src, size_t len) {
+static void MemToGdbHex(u8* dest, const u8* src, std::size_t len) {
     while (len-- > 0) {
         u8 tmp = *src++;
         *dest++ = NibbleToHex(tmp >> 4);
@@ -219,7 +370,7 @@ static void MemToGdbHex(u8* dest, const u8* src, size_t len) {
  * @param src Pointer to array of output hex string characters.
  * @param len Length of src array.
  */
-static void GdbHexToMem(u8* dest, const u8* src, size_t len) {
+static void GdbHexToMem(u8* dest, const u8* src, std::size_t len) {
     while (len-- > 0) {
         *dest++ = (HexCharToValue(src[0]) << 4) | HexCharToValue(src[1]);
         src += 2;
@@ -234,8 +385,21 @@ static void GdbHexToMem(u8* dest, const u8* src, size_t len) {
  */
 static void IntToGdbHex(u8* dest, u32 v) {
     for (int i = 0; i < 8; i += 2) {
-        dest[i + 1] = NibbleToHex(v >> (4 * i));
-        dest[i] = NibbleToHex(v >> (4 * (i + 1)));
+        dest[i + 1] = NibbleToHex(static_cast<u8>(v >> (4 * i)));
+        dest[i] = NibbleToHex(static_cast<u8>(v >> (4 * (i + 1))));
+    }
+}
+
+/**
+ * Convert a u64 into a gdb-formatted hex string.
+ *
+ * @param dest Pointer to buffer to store output hex string characters.
+ * @param v    Value to convert.
+ */
+static void LongToGdbHex(u8* dest, u64 v) {
+    for (int i = 0; i < 16; i += 2) {
+        dest[i + 1] = NibbleToHex(static_cast<u8>(v >> (4 * i)));
+        dest[i] = NibbleToHex(static_cast<u8>(v >> (4 * (i + 1))));
     }
 }
 
@@ -255,12 +419,49 @@ static u32 GdbHexToInt(const u8* src) {
     return output;
 }
 
+/**
+ * Convert a gdb-formatted hex string into a u64.
+ *
+ * @param src Pointer to hex string.
+ */
+static u64 GdbHexToLong(const u8* src) {
+    u64 output = 0;
+
+    for (int i = 0; i < 16; i += 2) {
+        output = (output << 4) | HexCharToValue(src[15 - i - 1]);
+        output = (output << 4) | HexCharToValue(src[15 - i]);
+    }
+
+    return output;
+}
+
+/**
+ * Convert a gdb-formatted hex string into a u128.
+ *
+ * @param src Pointer to hex string.
+ */
+static u128 GdbHexToU128(const u8* src) {
+    u128 output;
+
+    for (int i = 0; i < 16; i += 2) {
+        output[0] = (output[0] << 4) | HexCharToValue(src[15 - i - 1]);
+        output[0] = (output[0] << 4) | HexCharToValue(src[15 - i]);
+    }
+
+    for (int i = 0; i < 16; i += 2) {
+        output[1] = (output[1] << 4) | HexCharToValue(src[16 + 15 - i - 1]);
+        output[1] = (output[1] << 4) | HexCharToValue(src[16 + 15 - i]);
+    }
+
+    return output;
+}
+
 /// Read a byte from the gdb client.
 static u8 ReadByte() {
     u8 c;
-    size_t received_size = recv(gdbserver_socket, reinterpret_cast<char*>(&c), 1, MSG_WAITALL);
+    std::size_t received_size = recv(gdbserver_socket, reinterpret_cast<char*>(&c), 1, MSG_WAITALL);
     if (received_size != 1) {
-        LOG_ERROR(Debug_GDBStub, "recv failed : %ld", received_size);
+        LOG_ERROR(Debug_GDBStub, "recv failed: {}", received_size);
         Shutdown();
     }
 
@@ -268,16 +469,16 @@ static u8 ReadByte() {
 }
 
 /// Calculate the checksum of the current command buffer.
-static u8 CalculateChecksum(const u8* buffer, size_t length) {
+static u8 CalculateChecksum(const u8* buffer, std::size_t length) {
     return static_cast<u8>(std::accumulate(buffer, buffer + length, 0, std::plus<u8>()));
 }
 
 /**
- * Get the list of breakpoints for a given breakpoint type.
+ * Get the map of breakpoints for a given breakpoint type.
  *
- * @param type Type of breakpoint list.
+ * @param type Type of breakpoint map.
  */
-static std::map<u32, Breakpoint>& GetBreakpointList(BreakpointType type) {
+static BreakpointMap& GetBreakpointMap(BreakpointType type) {
     switch (type) {
     case BreakpointType::Execute:
         return breakpoints_execute;
@@ -296,20 +497,24 @@ static std::map<u32, Breakpoint>& GetBreakpointList(BreakpointType type) {
  * @param type Type of breakpoint.
  * @param addr Address of breakpoint.
  */
-static void RemoveBreakpoint(BreakpointType type, PAddr addr) {
-    std::map<u32, Breakpoint>& p = GetBreakpointList(type);
+static void RemoveBreakpoint(BreakpointType type, VAddr addr) {
+    BreakpointMap& p = GetBreakpointMap(type);
 
-    auto bp = p.find(addr);
-    if (bp != p.end()) {
-        LOG_DEBUG(Debug_GDBStub, "gdb: removed a breakpoint: %08x bytes at %08x of type %d\n",
-                  bp->second.len, bp->second.addr, type);
-        p.erase(addr);
+    const auto bp = p.find(addr);
+    if (bp == p.end()) {
+        return;
     }
+
+    LOG_DEBUG(Debug_GDBStub, "gdb: removed a breakpoint: {:016X} bytes at {:016X} of type {}",
+              bp->second.len, bp->second.addr, static_cast<int>(type));
+    Memory::WriteBlock(bp->second.addr, bp->second.inst.data(), bp->second.inst.size());
+    Core::System::GetInstance().InvalidateCpuInstructionCaches();
+    p.erase(addr);
 }
 
-BreakpointAddress GetNextBreakpointFromAddress(PAddr addr, BreakpointType type) {
-    std::map<u32, Breakpoint>& p = GetBreakpointList(type);
-    auto next_breakpoint = p.lower_bound(addr);
+BreakpointAddress GetNextBreakpointFromAddress(VAddr addr, BreakpointType type) {
+    const BreakpointMap& p = GetBreakpointMap(type);
+    const auto next_breakpoint = p.lower_bound(addr);
     BreakpointAddress breakpoint;
 
     if (next_breakpoint != p.end()) {
@@ -323,35 +528,38 @@ BreakpointAddress GetNextBreakpointFromAddress(PAddr addr, BreakpointType type) 
     return breakpoint;
 }
 
-bool CheckBreakpoint(PAddr addr, BreakpointType type) {
+bool CheckBreakpoint(VAddr addr, BreakpointType type) {
     if (!IsConnected()) {
         return false;
     }
 
-    std::map<u32, Breakpoint>& p = GetBreakpointList(type);
+    const BreakpointMap& p = GetBreakpointMap(type);
+    const auto bp = p.find(addr);
 
-    auto bp = p.find(addr);
-    if (bp != p.end()) {
-        u32 len = bp->second.len;
+    if (bp == p.end()) {
+        return false;
+    }
 
-        // IDA Pro defaults to 4-byte breakpoints for all non-hardware breakpoints
-        // no matter if it's a 4-byte or 2-byte instruction. When you execute a
-        // Thumb instruction with a 4-byte breakpoint set, it will set a breakpoint on
-        // two instructions instead of the single instruction you placed the breakpoint
-        // on. So, as a way to make sure that execution breakpoints are only breaking
-        // on the instruction that was specified, set the length of an execution
-        // breakpoint to 1. This should be fine since the CPU should never begin executing
-        // an instruction anywhere except the beginning of the instruction.
-        if (type == BreakpointType::Execute) {
-            len = 1;
-        }
+    u64 len = bp->second.len;
 
-        if (bp->second.active && (addr >= bp->second.addr && addr < bp->second.addr + len)) {
-            LOG_DEBUG(Debug_GDBStub,
-                      "Found breakpoint type %d @ %08x, range: %08x - %08x (%d bytes)\n", type,
-                      addr, bp->second.addr, bp->second.addr + len, len);
-            return true;
-        }
+    // IDA Pro defaults to 4-byte breakpoints for all non-hardware breakpoints
+    // no matter if it's a 4-byte or 2-byte instruction. When you execute a
+    // Thumb instruction with a 4-byte breakpoint set, it will set a breakpoint on
+    // two instructions instead of the single instruction you placed the breakpoint
+    // on. So, as a way to make sure that execution breakpoints are only breaking
+    // on the instruction that was specified, set the length of an execution
+    // breakpoint to 1. This should be fine since the CPU should never begin executing
+    // an instruction anywhere except the beginning of the instruction.
+    if (type == BreakpointType::Execute) {
+        len = 1;
+    }
+
+    if (bp->second.active && (addr >= bp->second.addr && addr < bp->second.addr + len)) {
+        LOG_DEBUG(Debug_GDBStub,
+                  "Found breakpoint type {} @ {:016X}, range: {:016X}"
+                  " - {:016X} ({:X} bytes)",
+                  static_cast<int>(type), addr, bp->second.addr, bp->second.addr + len, len);
+        return true;
     }
 
     return false;
@@ -363,7 +571,7 @@ bool CheckBreakpoint(PAddr addr, BreakpointType type) {
  * @param packet Packet to be sent to client.
  */
 static void SendPacket(const char packet) {
-    size_t sent_size = send(gdbserver_socket, &packet, 1, 0);
+    std::size_t sent_size = send(gdbserver_socket, &packet, 1, 0);
     if (sent_size != 1) {
         LOG_ERROR(Debug_GDBStub, "send failed");
     }
@@ -378,6 +586,8 @@ static void SendReply(const char* reply) {
     if (!IsConnected()) {
         return;
     }
+
+    LOG_DEBUG(Debug_GDBStub, "Reply: {}", reply);
 
     memset(command_buffer, 0, sizeof(command_buffer));
 
@@ -411,7 +621,7 @@ static void SendReply(const char* reply) {
 
 /// Handle query command from gdb client.
 static void HandleQuery() {
-    LOG_DEBUG(Debug_GDBStub, "gdb: query '%s'\n", command_buffer + 1);
+    LOG_DEBUG(Debug_GDBStub, "gdb: query '{}'", command_buffer + 1);
 
     const char* query = reinterpret_cast<const char*>(command_buffer + 1);
 
@@ -419,10 +629,55 @@ static void HandleQuery() {
         SendReply("T0");
     } else if (strncmp(query, "Supported", strlen("Supported")) == 0) {
         // PacketSize needs to be large enough for target xml
-        SendReply("PacketSize=800;qXfer:features:read+");
+        std::string buffer = "PacketSize=2000;qXfer:features:read+;qXfer:threads:read+";
+        if (!modules.empty()) {
+            buffer += ";qXfer:libraries:read+";
+        }
+        SendReply(buffer.c_str());
     } else if (strncmp(query, "Xfer:features:read:target.xml:",
                        strlen("Xfer:features:read:target.xml:")) == 0) {
         SendReply(target_xml);
+    } else if (strncmp(query, "Offsets", strlen("Offsets")) == 0) {
+        const VAddr base_address = Core::CurrentProcess()->VMManager().GetCodeRegionBaseAddress();
+        std::string buffer = fmt::format("TextSeg={:0x}", base_address);
+        SendReply(buffer.c_str());
+    } else if (strncmp(query, "fThreadInfo", strlen("fThreadInfo")) == 0) {
+        std::string val = "m";
+        for (u32 core = 0; core < Core::NUM_CPU_CORES; core++) {
+            const auto& threads = Core::System::GetInstance().Scheduler(core).GetThreadList();
+            for (const auto& thread : threads) {
+                val += fmt::format("{:x},", thread->GetThreadID());
+            }
+        }
+        val.pop_back();
+        SendReply(val.c_str());
+    } else if (strncmp(query, "sThreadInfo", strlen("sThreadInfo")) == 0) {
+        SendReply("l");
+    } else if (strncmp(query, "Xfer:threads:read", strlen("Xfer:threads:read")) == 0) {
+        std::string buffer;
+        buffer += "l<?xml version=\"1.0\"?>";
+        buffer += "<threads>";
+        for (u32 core = 0; core < Core::NUM_CPU_CORES; core++) {
+            const auto& threads = Core::System::GetInstance().Scheduler(core).GetThreadList();
+            for (const auto& thread : threads) {
+                buffer +=
+                    fmt::format(R"*(<thread id="{:x}" core="{:d}" name="Thread {:x}"></thread>)*",
+                                thread->GetThreadID(), core, thread->GetThreadID());
+            }
+        }
+        buffer += "</threads>";
+        SendReply(buffer.c_str());
+    } else if (strncmp(query, "Xfer:libraries:read", strlen("Xfer:libraries:read")) == 0) {
+        std::string buffer;
+        buffer += "l<?xml version=\"1.0\"?>";
+        buffer += "<library-list>";
+        for (const auto& module : modules) {
+            buffer +=
+                fmt::format(R"*("<library name = "{}"><segment address = "0x{:x}"/></library>)*",
+                            module.name, module.beg);
+        }
+        buffer += "</library-list>";
+        SendReply(buffer.c_str());
     } else {
         SendReply("");
     }
@@ -430,11 +685,34 @@ static void HandleQuery() {
 
 /// Handle set thread command from gdb client.
 static void HandleSetThread() {
-    if (memcmp(command_buffer, "Hg0", 3) == 0 || memcmp(command_buffer, "Hc-1", 4) == 0 ||
-        memcmp(command_buffer, "Hc0", 4) == 0 || memcmp(command_buffer, "Hc1", 4) == 0) {
-        return SendReply("OK");
+    int thread_id = -1;
+    if (command_buffer[2] != '-') {
+        thread_id = static_cast<int>(HexToInt(command_buffer + 2, command_length - 2));
     }
+    if (thread_id >= 1) {
+        current_thread = FindThreadById(thread_id);
+    }
+    if (!current_thread) {
+        thread_id = 1;
+        current_thread = FindThreadById(thread_id);
+    }
+    if (current_thread) {
+        SendReply("OK");
+        return;
+    }
+    SendReply("E01");
+}
 
+/// Handle thread alive command from gdb client.
+static void HandleThreadAlive() {
+    int thread_id = static_cast<int>(HexToInt(command_buffer + 1, command_length - 1));
+    if (thread_id == 0) {
+        thread_id = 1;
+    }
+    if (FindThreadById(thread_id)) {
+        SendReply("OK");
+        return;
+    }
     SendReply("E01");
 }
 
@@ -443,17 +721,31 @@ static void HandleSetThread() {
  *
  * @param signal Signal to be sent to client.
  */
-static void SendSignal(u32 signal) {
+static void SendSignal(Kernel::Thread* thread, u32 signal, bool full = true) {
     if (gdbserver_socket == -1) {
         return;
     }
 
     latest_signal = signal;
 
-    std::string buffer =
-        Common::StringFromFormat("T%02x%02x:%08x;%02x:%08x;", latest_signal, 15,
-                                 htonl(Core::CPU().GetPC()), 13, htonl(Core::CPU().GetReg(13)));
-    LOG_DEBUG(Debug_GDBStub, "Response: %s", buffer.c_str());
+    if (!thread) {
+        full = false;
+    }
+
+    std::string buffer;
+    if (full) {
+        buffer = fmt::format("T{:02x}{:02x}:{:016x};{:02x}:{:016x};{:02x}:{:016x}", latest_signal,
+                             PC_REGISTER, Common::swap64(RegRead(PC_REGISTER, thread)), SP_REGISTER,
+                             Common::swap64(RegRead(SP_REGISTER, thread)), LR_REGISTER,
+                             Common::swap64(RegRead(LR_REGISTER, thread)));
+    } else {
+        buffer = fmt::format("T{:02x}", latest_signal);
+    }
+
+    if (thread) {
+        buffer += fmt::format(";thread:{:x};", thread->GetThreadID());
+    }
+
     SendReply(buffer.c_str());
 }
 
@@ -467,18 +759,18 @@ static void ReadCommand() {
         // ignore ack
         return;
     } else if (c == 0x03) {
-        LOG_INFO(Debug_GDBStub, "gdb: found break command\n");
+        LOG_INFO(Debug_GDBStub, "gdb: found break command");
         halt_loop = true;
-        SendSignal(SIGTRAP);
+        SendSignal(current_thread, SIGTRAP);
         return;
     } else if (c != GDB_STUB_START) {
-        LOG_DEBUG(Debug_GDBStub, "gdb: read invalid byte %02x\n", c);
+        LOG_DEBUG(Debug_GDBStub, "gdb: read invalid byte {:02X}", c);
         return;
     }
 
     while ((c = ReadByte()) != GDB_STUB_END) {
         if (command_length >= sizeof(command_buffer)) {
-            LOG_ERROR(Debug_GDBStub, "gdb: command_buffer overflow\n");
+            LOG_ERROR(Debug_GDBStub, "gdb: command_buffer overflow");
             SendPacket(GDB_STUB_NACK);
             return;
         }
@@ -492,7 +784,7 @@ static void ReadCommand() {
 
     if (checksum_received != checksum_calculated) {
         LOG_ERROR(Debug_GDBStub,
-                  "gdb: invalid checksum: calculated %02x and read %02x for $%s# (length: %d)\n",
+                  "gdb: invalid checksum: calculated {:02X} and read {:02X} for ${}# (length: {})",
                   checksum_calculated, checksum_received, command_buffer, command_length);
 
         command_length = 0;
@@ -513,7 +805,7 @@ static bool IsDataAvailable() {
     fd_set fd_socket;
 
     FD_ZERO(&fd_socket);
-    FD_SET(gdbserver_socket, &fd_socket);
+    FD_SET(static_cast<u32>(gdbserver_socket), &fd_socket);
 
     struct timeval t;
     t.tv_sec = 0;
@@ -538,18 +830,22 @@ static void ReadRegister() {
         id |= HexCharToValue(command_buffer[2]);
     }
 
-    if (id <= R15_REGISTER) {
-        IntToGdbHex(reply, Core::CPU().GetReg(id));
-    } else if (id == CPSR_REGISTER) {
-        IntToGdbHex(reply, Core::CPU().GetCPSR());
-    } else if (id > CPSR_REGISTER && id < FPSCR_REGISTER) {
-        IntToGdbHex(reply, Core::CPU().GetVFPReg(
-                               id - CPSR_REGISTER -
-                               1)); // VFP registers should start at 26, so one after CSPR_REGISTER
-    } else if (id == FPSCR_REGISTER) {
-        UNIMPLEMENTED();
-    } else {
-        return SendReply("E01");
+    if (id <= SP_REGISTER) {
+        LongToGdbHex(reply, RegRead(id, current_thread));
+    } else if (id == PC_REGISTER) {
+        LongToGdbHex(reply, RegRead(id, current_thread));
+    } else if (id == PSTATE_REGISTER) {
+        IntToGdbHex(reply, static_cast<u32>(RegRead(id, current_thread)));
+    } else if (id >= UC_ARM64_REG_Q0 && id < FPCR_REGISTER) {
+        u128 r = FpuRead(id, current_thread);
+        LongToGdbHex(reply, r[0]);
+        LongToGdbHex(reply + 16, r[1]);
+    } else if (id == FPCR_REGISTER) {
+        u128 r = FpuRead(id, current_thread);
+        IntToGdbHex(reply, static_cast<u32>(r[0]));
+    } else if (id == FPCR_REGISTER + 1) {
+        u128 r = FpuRead(id, current_thread);
+        IntToGdbHex(reply, static_cast<u32>(r[0] >> 32));
     }
 
     SendReply(reinterpret_cast<char*>(reply));
@@ -562,21 +858,34 @@ static void ReadRegisters() {
 
     u8* bufptr = buffer;
 
-    for (int reg = 0; reg <= R15_REGISTER; reg++) {
-        IntToGdbHex(bufptr + reg * CHAR_BIT, Core::CPU().GetReg(reg));
+    for (u32 reg = 0; reg <= SP_REGISTER; reg++) {
+        LongToGdbHex(bufptr + reg * 16, RegRead(reg, current_thread));
     }
 
-    bufptr += (16 * CHAR_BIT);
+    bufptr += 32 * 16;
 
-    IntToGdbHex(bufptr, Core::CPU().GetCPSR());
+    LongToGdbHex(bufptr, RegRead(PC_REGISTER, current_thread));
 
-    bufptr += CHAR_BIT;
+    bufptr += 16;
 
-    for (int reg = 0; reg <= 31; reg++) {
-        IntToGdbHex(bufptr + reg * CHAR_BIT, Core::CPU().GetVFPReg(reg));
+    IntToGdbHex(bufptr, static_cast<u32>(RegRead(PSTATE_REGISTER, current_thread)));
+
+    bufptr += 8;
+
+    u128 r;
+
+    for (u32 reg = UC_ARM64_REG_Q0; reg < FPCR_REGISTER; reg++) {
+        r = FpuRead(reg, current_thread);
+        LongToGdbHex(bufptr + reg * 32, r[0]);
+        LongToGdbHex(bufptr + reg * 32 + 16, r[1]);
     }
 
-    bufptr += (32 * CHAR_BIT);
+    bufptr += 32 * 32;
+
+    r = FpuRead(FPCR_REGISTER, current_thread);
+    IntToGdbHex(bufptr, static_cast<u32>(r[0]));
+
+    bufptr += 8;
 
     SendReply(reinterpret_cast<char*>(buffer));
 }
@@ -592,17 +901,22 @@ static void WriteRegister() {
         id |= HexCharToValue(command_buffer[2]);
     }
 
-    if (id <= R15_REGISTER) {
-        Core::CPU().SetReg(id, GdbHexToInt(buffer_ptr));
-    } else if (id == CPSR_REGISTER) {
-        Core::CPU().SetCPSR(GdbHexToInt(buffer_ptr));
-    } else if (id > CPSR_REGISTER && id < FPSCR_REGISTER) {
-        Core::CPU().SetVFPReg(id - CPSR_REGISTER - 1, GdbHexToInt(buffer_ptr));
-    } else if (id == FPSCR_REGISTER) {
-        UNIMPLEMENTED();
-    } else {
-        return SendReply("E01");
+    if (id <= SP_REGISTER) {
+        RegWrite(id, GdbHexToLong(buffer_ptr), current_thread);
+    } else if (id == PC_REGISTER) {
+        RegWrite(id, GdbHexToLong(buffer_ptr), current_thread);
+    } else if (id == PSTATE_REGISTER) {
+        RegWrite(id, GdbHexToInt(buffer_ptr), current_thread);
+    } else if (id >= UC_ARM64_REG_Q0 && id < FPCR_REGISTER) {
+        FpuWrite(id, GdbHexToU128(buffer_ptr), current_thread);
+    } else if (id == FPCR_REGISTER) {
+    } else if (id == FPCR_REGISTER + 1) {
     }
+
+    // Update ARM context, skipping scheduler - no running threads at this point
+    Core::System::GetInstance()
+        .ArmInterface(current_core)
+        .LoadContext(current_thread->GetContext());
 
     SendReply("OK");
 }
@@ -614,23 +928,26 @@ static void WriteRegisters() {
     if (command_buffer[0] != 'G')
         return SendReply("E01");
 
-    for (int i = 0, reg = 0; reg <= FPSCR_REGISTER; i++, reg++) {
-        if (reg <= R15_REGISTER) {
-            Core::CPU().SetReg(reg, GdbHexToInt(buffer_ptr + i * CHAR_BIT));
-        } else if (reg == CPSR_REGISTER) {
-            Core::CPU().SetCPSR(GdbHexToInt(buffer_ptr + i * CHAR_BIT));
-        } else if (reg == CPSR_REGISTER - 1) {
-            // Dummy FPA register, ignore
-        } else if (reg < CPSR_REGISTER) {
-            // Dummy FPA registers, ignore
-            i += 2;
-        } else if (reg > CPSR_REGISTER && reg < FPSCR_REGISTER) {
-            Core::CPU().SetVFPReg(reg - CPSR_REGISTER - 1, GdbHexToInt(buffer_ptr + i * CHAR_BIT));
-            i++; // Skip padding
-        } else if (reg == FPSCR_REGISTER) {
-            UNIMPLEMENTED();
+    for (u32 i = 0, reg = 0; reg <= FPCR_REGISTER; i++, reg++) {
+        if (reg <= SP_REGISTER) {
+            RegWrite(reg, GdbHexToLong(buffer_ptr + i * 16), current_thread);
+        } else if (reg == PC_REGISTER) {
+            RegWrite(PC_REGISTER, GdbHexToLong(buffer_ptr + i * 16), current_thread);
+        } else if (reg == PSTATE_REGISTER) {
+            RegWrite(PSTATE_REGISTER, GdbHexToInt(buffer_ptr + i * 16), current_thread);
+        } else if (reg >= UC_ARM64_REG_Q0 && reg < FPCR_REGISTER) {
+            RegWrite(reg, GdbHexToLong(buffer_ptr + i * 16), current_thread);
+        } else if (reg == FPCR_REGISTER) {
+            RegWrite(FPCR_REGISTER, GdbHexToLong(buffer_ptr + i * 16), current_thread);
+        } else if (reg == FPCR_REGISTER + 1) {
+            RegWrite(FPCR_REGISTER, GdbHexToLong(buffer_ptr + i * 16), current_thread);
         }
     }
+
+    // Update ARM context, skipping scheduler - no running threads at this point
+    Core::System::GetInstance()
+        .ArmInterface(current_core)
+        .LoadContext(current_thread->GetContext());
 
     SendReply("OK");
 }
@@ -640,14 +957,14 @@ static void ReadMemory() {
     static u8 reply[GDB_BUFFER_SIZE - 4];
 
     auto start_offset = command_buffer + 1;
-    auto addr_pos = std::find(start_offset, command_buffer + command_length, ',');
-    VAddr addr = HexToInt(start_offset, static_cast<u32>(addr_pos - start_offset));
+    const auto addr_pos = std::find(start_offset, command_buffer + command_length, ',');
+    const VAddr addr = HexToLong(start_offset, static_cast<u64>(addr_pos - start_offset));
 
     start_offset = addr_pos + 1;
-    u32 len =
-        HexToInt(start_offset, static_cast<u32>((command_buffer + command_length) - start_offset));
+    const u64 len =
+        HexToLong(start_offset, static_cast<u64>((command_buffer + command_length) - start_offset));
 
-    LOG_DEBUG(Debug_GDBStub, "gdb: addr: %08x len: %08x\n", addr, len);
+    LOG_DEBUG(Debug_GDBStub, "gdb: addr: {:016X} len: {:016X}", addr, len);
 
     if (len * 2 > sizeof(reply)) {
         SendReply("E01");
@@ -669,11 +986,11 @@ static void ReadMemory() {
 static void WriteMemory() {
     auto start_offset = command_buffer + 1;
     auto addr_pos = std::find(start_offset, command_buffer + command_length, ',');
-    VAddr addr = HexToInt(start_offset, static_cast<u32>(addr_pos - start_offset));
+    VAddr addr = HexToLong(start_offset, static_cast<u64>(addr_pos - start_offset));
 
     start_offset = addr_pos + 1;
     auto len_pos = std::find(start_offset, command_buffer + command_length, ':');
-    u32 len = HexToInt(start_offset, static_cast<u32>(len_pos - start_offset));
+    u64 len = HexToLong(start_offset, static_cast<u64>(len_pos - start_offset));
 
     if (!Memory::IsValidVirtualAddress(addr)) {
         return SendReply("E00");
@@ -683,26 +1000,32 @@ static void WriteMemory() {
 
     GdbHexToMem(data.data(), len_pos + 1, len);
     Memory::WriteBlock(addr, data.data(), len);
+    Core::System::GetInstance().InvalidateCpuInstructionCaches();
     SendReply("OK");
 }
 
 void Break(bool is_memory_break) {
-    if (!halt_loop) {
-        halt_loop = true;
-        SendSignal(SIGTRAP);
-    }
+    send_trap = true;
 
     memory_break = is_memory_break;
 }
 
 /// Tell the CPU that it should perform a single step.
 static void Step() {
+    if (command_length > 1) {
+        RegWrite(PC_REGISTER, GdbHexToLong(command_buffer + 1), current_thread);
+        // Update ARM context, skipping scheduler - no running threads at this point
+        Core::System::GetInstance()
+            .ArmInterface(current_core)
+            .LoadContext(current_thread->GetContext());
+    }
     step_loop = true;
     halt_loop = true;
-    step_break = true;
-    SendSignal(SIGTRAP);
+    send_trap = true;
+    Core::System::GetInstance().InvalidateCpuInstructionCaches();
 }
 
+/// Tell the CPU if we hit a memory breakpoint.
 bool IsMemoryBreak() {
     if (IsConnected()) {
         return false;
@@ -714,9 +1037,9 @@ bool IsMemoryBreak() {
 /// Tell the CPU to continue executing.
 static void Continue() {
     memory_break = false;
-    step_break = false;
     step_loop = false;
     halt_loop = false;
+    Core::System::GetInstance().InvalidateCpuInstructionCaches();
 }
 
 /**
@@ -726,17 +1049,21 @@ static void Continue() {
  * @param addr Address of breakpoint.
  * @param len Length of breakpoint.
  */
-static bool CommitBreakpoint(BreakpointType type, PAddr addr, u32 len) {
-    std::map<u32, Breakpoint>& p = GetBreakpointList(type);
+static bool CommitBreakpoint(BreakpointType type, VAddr addr, u64 len) {
+    BreakpointMap& p = GetBreakpointMap(type);
 
     Breakpoint breakpoint;
     breakpoint.active = true;
     breakpoint.addr = addr;
     breakpoint.len = len;
+    Memory::ReadBlock(addr, breakpoint.inst.data(), breakpoint.inst.size());
+    static constexpr std::array<u8, 4> btrap{0x00, 0x7d, 0x20, 0xd4};
+    Memory::WriteBlock(addr, btrap.data(), btrap.size());
+    Core::System::GetInstance().InvalidateCpuInstructionCaches();
     p.insert({addr, breakpoint});
 
-    LOG_DEBUG(Debug_GDBStub, "gdb: added %d breakpoint: %08x bytes at %08x\n", type, breakpoint.len,
-              breakpoint.addr);
+    LOG_DEBUG(Debug_GDBStub, "gdb: added {} breakpoint: {:016X} bytes at {:016X}",
+              static_cast<int>(type), breakpoint.len, breakpoint.addr);
 
     return true;
 }
@@ -766,11 +1093,11 @@ static void AddBreakpoint() {
 
     auto start_offset = command_buffer + 3;
     auto addr_pos = std::find(start_offset, command_buffer + command_length, ',');
-    PAddr addr = HexToInt(start_offset, static_cast<u32>(addr_pos - start_offset));
+    VAddr addr = HexToLong(start_offset, static_cast<u64>(addr_pos - start_offset));
 
     start_offset = addr_pos + 1;
-    u32 len =
-        HexToInt(start_offset, static_cast<u32>((command_buffer + command_length) - start_offset));
+    u64 len =
+        HexToLong(start_offset, static_cast<u64>((command_buffer + command_length) - start_offset));
 
     if (type == BreakpointType::Access) {
         // Access is made up of Read and Write types, so add both breakpoints
@@ -815,7 +1142,7 @@ static void RemoveBreakpoint() {
 
     auto start_offset = command_buffer + 3;
     auto addr_pos = std::find(start_offset, command_buffer + command_length, ',');
-    PAddr addr = HexToInt(start_offset, static_cast<u32>(addr_pos - start_offset));
+    VAddr addr = HexToLong(start_offset, static_cast<u64>(addr_pos - start_offset));
 
     if (type == BreakpointType::Access) {
         // Access is made up of Read and Write types, so add both breakpoints
@@ -843,7 +1170,7 @@ void HandlePacket() {
         return;
     }
 
-    LOG_DEBUG(Debug_GDBStub, "Packet: %s", command_buffer);
+    LOG_DEBUG(Debug_GDBStub, "Packet: {}", command_buffer);
 
     switch (command_buffer[0]) {
     case 'q':
@@ -853,7 +1180,7 @@ void HandlePacket() {
         HandleSetThread();
         break;
     case '?':
-        SendSignal(latest_signal);
+        SendSignal(current_thread, latest_signal);
         break;
     case 'k':
         Shutdown();
@@ -890,6 +1217,9 @@ void HandlePacket() {
     case 'Z':
         AddBreakpoint();
         break;
+    case 'T':
+        HandleThreadAlive();
+        break;
     default:
         SendReply("");
         break;
@@ -905,7 +1235,7 @@ void ToggleServer(bool status) {
         server_enabled = status;
 
         // Start server
-        if (!IsConnected() && Core::System().GetInstance().IsPoweredOn()) {
+        if (!IsConnected() && Core::System::GetInstance().IsPoweredOn()) {
             Init();
         }
     } else {
@@ -935,8 +1265,10 @@ static void Init(u16 port) {
     breakpoints_read.clear();
     breakpoints_write.clear();
 
+    modules.clear();
+
     // Start gdb server
-    LOG_INFO(Debug_GDBStub, "Starting GDB server on port %d...", port);
+    LOG_INFO(Debug_GDBStub, "Starting GDB server on port {}...", port);
 
     sockaddr_in saddr_server = {};
     saddr_server.sin_family = AF_INET;
@@ -970,7 +1302,7 @@ static void Init(u16 port) {
     }
 
     // Wait for gdb to connect
-    LOG_INFO(Debug_GDBStub, "Waiting for gdb to connect...\n");
+    LOG_INFO(Debug_GDBStub, "Waiting for gdb to connect...");
     sockaddr_in saddr_client;
     sockaddr* client_addr = reinterpret_cast<sockaddr*>(&saddr_client);
     socklen_t client_addrlen = sizeof(saddr_client);
@@ -983,7 +1315,7 @@ static void Init(u16 port) {
 
         LOG_ERROR(Debug_GDBStub, "Failed to accept gdb client");
     } else {
-        LOG_INFO(Debug_GDBStub, "Client connected.\n");
+        LOG_INFO(Debug_GDBStub, "Client connected.");
         saddr_client.sin_addr.s_addr = ntohl(saddr_client.sin_addr.s_addr);
     }
 
@@ -1034,4 +1366,17 @@ bool GetCpuStepFlag() {
 void SetCpuStepFlag(bool is_step) {
     step_loop = is_step;
 }
-};
+
+void SendTrap(Kernel::Thread* thread, int trap) {
+    if (!send_trap) {
+        return;
+    }
+
+    if (!halt_loop || current_thread == thread) {
+        current_thread = thread;
+        SendSignal(thread, trap);
+    }
+    halt_loop = true;
+    send_trap = false;
+}
+}; // namespace GDBStub

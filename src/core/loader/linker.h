@@ -24,8 +24,7 @@ protected:
     };
 
     void WriteRelocations(std::vector<u8>& program_image, const std::vector<Symbol>& symbols,
-                          u64 relocation_offset, u64 size, bool is_jump_relocation,
-                          VAddr load_base);
+                          u64 relocation_offset, u64 size, VAddr load_base);
     void Relocate(std::vector<u8>& program_image, u32 dynamic_section_offset, VAddr load_base);
 
     void ResolveImports();

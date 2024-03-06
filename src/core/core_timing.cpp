@@ -5,16 +5,15 @@
 #include "core/core_timing.h"
 
 #include <algorithm>
-#include <cinttypes>
 #include <mutex>
 #include <string>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
 #include "common/assert.h"
-#include "common/logging/log.h"
 #include "common/thread.h"
 #include "common/threadsafe_queue.h"
+#include "core/core_timing_util.h"
 
 namespace CoreTiming {
 
@@ -57,7 +56,10 @@ static u64 event_fifo_id;
 // to the event_queue by the emu thread
 static Common::MPSCQueue<Event, false> ts_queue;
 
-static constexpr int MAX_SLICE_LENGTH = 20000;
+// the queue for unscheduling the events from other threads threadsafe
+static Common::MPSCQueue<std::pair<const EventType*, u64>, false> unschedule_queue;
+
+constexpr int MAX_SLICE_LENGTH = 20000;
 
 static s64 idled_cycles;
 
@@ -74,7 +76,7 @@ EventType* RegisterEvent(const std::string& name, TimedCallback callback) {
     // check for existing type with same name.
     // we want event type names to remain unique so that we can use them for serialization.
     ASSERT_MSG(event_types.find(name) == event_types.end(),
-               "CoreTiming Event \"%s\" is already registered. Events should only be registered "
+               "CoreTiming Event \"{}\" is already registered. Events should only be registered "
                "during Init to avoid breaking save states.",
                name.c_str());
 
@@ -122,7 +124,7 @@ u64 GetTicks() {
 }
 
 void AddTicks(u64 ticks) {
-    downcount -= ticks;
+    downcount -= static_cast<int>(ticks);
 }
 
 u64 GetIdleTicks() {
@@ -136,13 +138,11 @@ void ClearPendingEvents() {
 void ScheduleEvent(s64 cycles_into_future, const EventType* event_type, u64 userdata) {
     ASSERT(event_type != nullptr);
     s64 timeout = GetTicks() + cycles_into_future;
-
     // If this event needs to be scheduled before the next advance(), force one early
     if (!is_global_timer_sane)
         ForceExceptionCheck(cycles_into_future);
-
     event_queue.emplace_back(Event{timeout, event_fifo_id++, userdata, event_type});
-    std::push_heap(event_queue.begin(), event_queue.end(), std::greater<Event>());
+    std::push_heap(event_queue.begin(), event_queue.end(), std::greater<>());
 }
 
 void ScheduleEventThreadsafe(s64 cycles_into_future, const EventType* event_type, u64 userdata) {
@@ -157,8 +157,12 @@ void UnscheduleEvent(const EventType* event_type, u64 userdata) {
     // Removing random items breaks the invariant so we have to re-establish it.
     if (itr != event_queue.end()) {
         event_queue.erase(itr, event_queue.end());
-        std::make_heap(event_queue.begin(), event_queue.end(), std::greater<Event>());
+        std::make_heap(event_queue.begin(), event_queue.end(), std::greater<>());
     }
+}
+
+void UnscheduleEventThreadsafe(const EventType* event_type, u64 userdata) {
+    unschedule_queue.Push(std::make_pair(event_type, userdata));
 }
 
 void RemoveEvent(const EventType* event_type) {
@@ -168,7 +172,7 @@ void RemoveEvent(const EventType* event_type) {
     // Removing random items breaks the invariant so we have to re-establish it.
     if (itr != event_queue.end()) {
         event_queue.erase(itr, event_queue.end());
-        std::make_heap(event_queue.begin(), event_queue.end(), std::greater<Event>());
+        std::make_heap(event_queue.begin(), event_queue.end(), std::greater<>());
     }
 }
 
@@ -191,12 +195,15 @@ void MoveEvents() {
     for (Event ev; ts_queue.Pop(ev);) {
         ev.fifo_order = event_fifo_id++;
         event_queue.emplace_back(std::move(ev));
-        std::push_heap(event_queue.begin(), event_queue.end(), std::greater<Event>());
+        std::push_heap(event_queue.begin(), event_queue.end(), std::greater<>());
     }
 }
 
 void Advance() {
     MoveEvents();
+    for (std::pair<const EventType*, u64> ev; unschedule_queue.Pop(ev);) {
+        UnscheduleEvent(ev.first, ev.second);
+    }
 
     int cycles_executed = slice_length - downcount;
     global_timer += cycles_executed;
@@ -206,9 +213,9 @@ void Advance() {
 
     while (!event_queue.empty() && event_queue.front().time <= global_timer) {
         Event evt = std::move(event_queue.front());
-        std::pop_heap(event_queue.begin(), event_queue.end(), std::greater<Event>());
+        std::pop_heap(event_queue.begin(), event_queue.end(), std::greater<>());
         event_queue.pop_back();
-        evt.type->callback(evt.userdata, global_timer - evt.time);
+        evt.type->callback(evt.userdata, static_cast<int>(global_timer - evt.time));
     }
 
     is_global_timer_sane = false;
@@ -227,8 +234,8 @@ void Idle() {
     downcount = 0;
 }
 
-u64 GetGlobalTimeUs() {
-    return GetTicks() * 1000000 / BASE_CLOCK_RATE;
+std::chrono::microseconds GetGlobalTimeUs() {
+    return std::chrono::microseconds{GetTicks() * 1000000 / BASE_CLOCK_RATE};
 }
 
 int GetDowncount() {

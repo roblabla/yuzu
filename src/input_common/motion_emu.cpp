@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
 #include <chrono>
 #include <mutex>
 #include <thread>
@@ -43,8 +44,8 @@ public:
                 tilt_angle = 0;
             } else {
                 tilt_direction = mouse_move.Cast<float>();
-                tilt_angle = MathUtil::Clamp(tilt_direction.Normalize() * sensitivity, 0.0f,
-                                             MathUtil::PI * 0.5f);
+                tilt_angle =
+                    std::clamp(tilt_direction.Normalize() * sensitivity, 0.0f, MathUtil::PI * 0.5f);
             }
         }
     }
@@ -130,7 +131,7 @@ public:
         device = std::make_shared<MotionEmuDevice>(update_millisecond, sensitivity);
     }
 
-    std::tuple<Math::Vec3<float>, Math::Vec3<float>> GetStatus() const {
+    std::tuple<Math::Vec3<float>, Math::Vec3<float>> GetStatus() const override {
         return device->GetStatus();
     }
 

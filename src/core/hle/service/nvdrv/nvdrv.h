@@ -10,110 +10,56 @@
 #include "common/common_types.h"
 #include "core/hle/service/service.h"
 
-namespace Service {
-namespace NVDRV {
+namespace Service::NVFlinger {
+class NVFlinger;
+}
 
-class nvdevice {
-public:
-    virtual ~nvdevice() = default;
+namespace Service::Nvidia {
 
-    virtual u32 ioctl(u32 command, const std::vector<u8>& input, std::vector<u8>& output) = 0;
+namespace Devices {
+class nvdevice;
+}
+
+struct IoctlFence {
+    u32 id;
+    u32 value;
 };
 
-class nvmap : public nvdevice {
+static_assert(sizeof(IoctlFence) == 8, "IoctlFence has wrong size");
+
+class Module final {
 public:
-    /// Returns the allocated address of an nvmap object given its handle.
-    VAddr GetObjectAddress(u32 handle) const;
+    Module();
+    ~Module();
 
-    u32 ioctl(u32 command, const std::vector<u8>& input, std::vector<u8>& output) override;
-private:
-    // Represents an nvmap object.
-    struct Object {
-        enum class Status { Created, Allocated };
-        u32 id;
-        u32 size;
-        u32 flags;
-        u32 align;
-        u8 kind;
-        VAddr addr;
-        Status status;
-    };
+    /// Returns a pointer to one of the available devices, identified by its name.
+    template <typename T>
+    std::shared_ptr<T> GetDevice(const std::string& name) {
+        auto itr = devices.find(name);
+        if (itr == devices.end())
+            return nullptr;
+        return std::static_pointer_cast<T>(itr->second);
+    }
 
-    u32 next_handle = 1;
-    u32 next_id = 1;
-    std::unordered_map<u32, std::shared_ptr<Object>> handles;
-
-    enum IoctlCommands {
-        IocCreateCommand = 0xC0080101,
-        IocFromIdCommand = 0xC0080103,
-        IocAllocCommand = 0xC0200104,
-        IocParamCommand = 0xC00C0109,
-        IocGetIdCommand = 0xC008010E
-    };
-
-    struct IocCreateParams {
-        // Input
-        u32_le size;
-        // Output
-        u32_le handle;
-    };
-
-    struct IocAllocParams {
-        // Input
-        u32_le handle;
-        u32_le heap_mask;
-        u32_le flags;
-        u32_le align;
-        u8 kind;
-        INSERT_PADDING_BYTES(7);
-        u64_le addr;
-    };
-
-    struct IocGetIdParams {
-        // Output
-        u32_le id;
-        // Input
-        u32_le handle;
-    };
-
-    struct IocFromIdParams {
-        // Input
-        u32_le id;
-        // Output
-        u32_le handle;
-    };
-
-    struct IocParamParams {
-        // Input
-        u32_le handle;
-        u32_le type;
-        // Output
-        u32_le value;
-    };
-
-    u32 IocCreate(const std::vector<u8>& input, std::vector<u8>& output);
-    u32 IocAlloc(const std::vector<u8>& input, std::vector<u8>& output);
-    u32 IocGetId(const std::vector<u8>& input, std::vector<u8>& output);
-    u32 IocFromId(const std::vector<u8>& input, std::vector<u8>& output);
-    u32 IocParam(const std::vector<u8>& input, std::vector<u8>& output);
-};
-
-class nvdisp_disp0 : public nvdevice {
-public:
-    nvdisp_disp0(std::shared_ptr<nvmap> nvmap_dev) : nvdevice(), nvmap_dev(std::move(nvmap_dev)) {}
-    ~nvdisp_disp0() = default;
-
-    u32 ioctl(u32 command, const std::vector<u8>& input, std::vector<u8>& output) override;
-
-    /// Performs a screen flip, drawing the buffer pointed to by the handle.
-    void flip(u32 buffer_handle, u32 offset, u32 format, u32 width, u32 height, u32 stride);
+    /// Opens a device node and returns a file descriptor to it.
+    u32 Open(const std::string& device_name);
+    /// Sends an ioctl command to the specified file descriptor.
+    u32 Ioctl(u32 fd, u32 command, const std::vector<u8>& input, std::vector<u8>& output);
+    /// Closes a device file descriptor and returns operation success.
+    ResultCode Close(u32 fd);
 
 private:
-    std::shared_ptr<nvmap> nvmap_dev;
+    /// Id to use for the next open file descriptor.
+    u32 next_fd = 1;
+
+    /// Mapping of file descriptors to the devices they reference.
+    std::unordered_map<u32, std::shared_ptr<Devices::nvdevice>> open_files;
+
+    /// Mapping of device node names to their implementation.
+    std::unordered_map<std::string, std::shared_ptr<Devices::nvdevice>> devices;
 };
 
 /// Registers all NVDRV services with the specified service manager.
-void InstallInterfaces(SM::ServiceManager& service_manager);
+void InstallInterfaces(SM::ServiceManager& service_manager, NVFlinger::NVFlinger& nvflinger);
 
-} // namespace NVDRV
-} // namespace Service
+} // namespace Service::Nvidia

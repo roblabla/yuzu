@@ -5,22 +5,29 @@
 #include <utility>
 #include "common/assert.h"
 #include "common/logging/log.h"
-#include "core/hle/kernel/client_session.h"
+#include "core/core.h"
 #include "core/hle/kernel/errors.h"
 #include "core/hle/kernel/handle_table.h"
-#include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/process.h"
-#include "core/hle/kernel/session.h"
 #include "core/hle/kernel/thread.h"
 
 namespace Kernel {
+namespace {
+constexpr u16 GetSlot(Handle handle) {
+    return handle >> 15;
+}
 
-HandleTable g_handle_table;
+constexpr u16 GetGeneration(Handle handle) {
+    return handle & 0x7FFF;
+}
+} // Anonymous namespace
 
 HandleTable::HandleTable() {
     next_generation = 1;
     Clear();
 }
+
+HandleTable::~HandleTable() = default;
 
 ResultVal<Handle> HandleTable::Create(SharedPtr<Object> obj) {
     DEBUG_ASSERT(obj != nullptr);
@@ -28,16 +35,17 @@ ResultVal<Handle> HandleTable::Create(SharedPtr<Object> obj) {
     u16 slot = next_free_slot;
     if (slot >= generations.size()) {
         LOG_ERROR(Kernel, "Unable to allocate Handle, too many slots in use.");
-        return ERR_OUT_OF_HANDLES;
+        return ERR_HANDLE_TABLE_FULL;
     }
     next_free_slot = generations[slot];
 
     u16 generation = next_generation++;
 
     // Overflow count so it fits in the 15 bits dedicated to the generation in the handle.
-    // CTR-OS doesn't use generation 0, so skip straight to 1.
-    if (next_generation >= (1 << 15))
+    // Horizon OS uses zero to represent an invalid handle, so skip to 1.
+    if (next_generation >= (1 << 15)) {
         next_generation = 1;
+    }
 
     generations[slot] = generation;
     objects[slot] = std::move(obj);
@@ -49,18 +57,10 @@ ResultVal<Handle> HandleTable::Create(SharedPtr<Object> obj) {
 ResultVal<Handle> HandleTable::Duplicate(Handle handle) {
     SharedPtr<Object> object = GetGeneric(handle);
     if (object == nullptr) {
-        LOG_ERROR(Kernel, "Tried to duplicate invalid handle: %08X", handle);
+        LOG_ERROR(Kernel, "Tried to duplicate invalid handle: {:08X}", handle);
         return ERR_INVALID_HANDLE;
     }
     return Create(std::move(object));
-}
-
-void HandleTable::ConvertSessionToDomain(const Session& session, SharedPtr<Object> domain) {
-    for (auto& object : objects) {
-        if (DynamicObjectCast<ClientSession>(object) == session.client) {
-            object = domain;
-        }
-    }
 }
 
 ResultCode HandleTable::Close(Handle handle) {
@@ -77,7 +77,7 @@ ResultCode HandleTable::Close(Handle handle) {
 }
 
 bool HandleTable::IsValid(Handle handle) const {
-    size_t slot = GetSlot(handle);
+    std::size_t slot = GetSlot(handle);
     u16 generation = GetGeneration(handle);
 
     return slot < MAX_COUNT && objects[slot] != nullptr && generations[slot] == generation;
@@ -87,7 +87,7 @@ SharedPtr<Object> HandleTable::GetGeneric(Handle handle) const {
     if (handle == CurrentThread) {
         return GetCurrentThread();
     } else if (handle == CurrentProcess) {
-        return g_current_process;
+        return Core::CurrentProcess();
     }
 
     if (!IsValid(handle)) {
@@ -104,4 +104,4 @@ void HandleTable::Clear() {
     next_free_slot = 0;
 }
 
-} // namespace
+} // namespace Kernel

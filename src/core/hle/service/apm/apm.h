@@ -6,17 +6,20 @@
 
 #include "core/hle/service/service.h"
 
-namespace Service {
-namespace APM {
+namespace Service::APM {
 
-class APM final : public ServiceFramework<APM> {
+enum class PerformanceMode : u8 {
+    Handheld = 0,
+    Docked = 1,
+};
+
+class Module final {
 public:
-    APM();
-    ~APM() = default;
+    Module();
+    ~Module();
 };
 
 /// Registers all AM services with the specified service manager.
 void InstallInterfaces(SM::ServiceManager& service_manager);
 
-} // namespace APM
-} // namespace Service
+} // namespace Service::APM

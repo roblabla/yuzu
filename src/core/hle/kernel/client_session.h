@@ -6,17 +6,18 @@
 
 #include <memory>
 #include <string>
-#include "common/common_types.h"
-#include "core/hle/kernel/sync_object.h"
-#include "core/hle/result.h"
+#include "core/hle/kernel/object.h"
+
+union ResultCode;
 
 namespace Kernel {
 
-class ServerSession;
+class KernelCore;
 class Session;
+class ServerSession;
 class Thread;
 
-class ClientSession final : public SyncObject {
+class ClientSession final : public Object {
 public:
     friend class ServerSession;
 
@@ -33,7 +34,7 @@ public:
         return HANDLE_TYPE;
     }
 
-    ResultCode SendSyncRequest(SharedPtr<Thread> thread) override;
+    ResultCode SendSyncRequest(SharedPtr<Thread> thread);
 
     std::string name; ///< Name of client port (optional)
 
@@ -41,8 +42,8 @@ public:
     std::shared_ptr<Session> parent;
 
 private:
-    ClientSession();
+    explicit ClientSession(KernelCore& kernel);
     ~ClientSession() override;
 };
 
-} // namespace
+} // namespace Kernel

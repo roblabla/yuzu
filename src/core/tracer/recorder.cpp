@@ -76,7 +76,7 @@ void Recorder::Finish(const std::string& filename) {
     try {
         // Open file and write header
         FileUtil::IOFile file(filename, "wb");
-        size_t written = file.WriteObject(header);
+        std::size_t written = file.WriteObject(header);
         if (written != 1 || file.Tell() != initial.gpu_registers)
             throw "Failed to write header";
 
@@ -159,7 +159,7 @@ void Recorder::Finish(const std::string& filename) {
                 throw "Failed to write stream element";
         }
     } catch (const char* str) {
-        LOG_ERROR(HW_GPU, "Writing CiTrace file failed: %s", str);
+        LOG_ERROR(HW_GPU, "Writing CiTrace file failed: {}", str);
     }
 }
 
@@ -205,4 +205,4 @@ template void Recorder::RegisterWritten(u32, u8);
 template void Recorder::RegisterWritten(u32, u16);
 template void Recorder::RegisterWritten(u32, u32);
 template void Recorder::RegisterWritten(u32, u64);
-}
+} // namespace CiTrace

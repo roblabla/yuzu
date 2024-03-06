@@ -1,27 +1,28 @@
-// Copyright 2014 Citra Emulator Project
+// Copyright 2018 yuzu emulator team
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
 #pragma once
 
-#include <algorithm>
-#include <initializer_list>
+#include <iosfwd>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
-#include <boost/optional.hpp>
+
 #include "common/common_types.h"
-#include "common/file_util.h"
-#include "core/hle/kernel/kernel.h"
+#include "core/file_sys/control_metadata.h"
+#include "core/file_sys/vfs.h"
+
+namespace FileSys {
+class NACP;
+} // namespace FileSys
 
 namespace Kernel {
 struct AddressMapping;
 class Process;
 } // namespace Kernel
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// Loader namespace
 
 namespace Loader {
 
@@ -32,6 +33,11 @@ enum class FileType {
     ELF,
     NSO,
     NRO,
+    NCA,
+    NSP,
+    XCI,
+    NAX,
+    DeconstructedRomDirectory,
 };
 
 /**
@@ -39,60 +45,107 @@ enum class FileType {
  * @param file open file
  * @return FileType of file
  */
-FileType IdentifyFile(FileUtil::IOFile& file);
+FileType IdentifyFile(FileSys::VirtualFile file);
 
 /**
- * Identifies the type of a bootable file based on the magic value in its header.
- * @param file_name path to file
+ * Guess the type of a bootable file from its name
+ * @param name String name of bootable file
  * @return FileType of file. Note: this will return FileType::Unknown if it is unable to determine
  * a filetype, and will never return FileType::Error.
  */
-FileType IdentifyFile(const std::string& file_name);
-
-/**
- * Guess the type of a bootable file from its extension
- * @param extension String extension of bootable file
- * @return FileType of file. Note: this will return FileType::Unknown if it is unable to determine
- * a filetype, and will never return FileType::Error.
- */
-FileType GuessFromExtension(const std::string& extension);
+FileType GuessFromFilename(const std::string& name);
 
 /**
  * Convert a FileType into a string which can be displayed to the user.
  */
-const char* GetFileTypeString(FileType type);
+std::string GetFileTypeString(FileType type);
 
 /// Return type for functions in Loader namespace
-enum class ResultStatus {
+enum class ResultStatus : u16 {
     Success,
-    Error,
-    ErrorInvalidFormat,
-    ErrorNotImplemented,
-    ErrorNotLoaded,
-    ErrorNotUsed,
     ErrorAlreadyLoaded,
-    ErrorMemoryAllocationFailed,
-    ErrorEncrypted,
+    ErrorNotImplemented,
+    ErrorNotInitialized,
+    ErrorBadNPDMHeader,
+    ErrorBadACIDHeader,
+    ErrorBadACIHeader,
+    ErrorBadFileAccessControl,
+    ErrorBadFileAccessHeader,
+    ErrorBadKernelCapabilityDescriptors,
+    ErrorBadPFSHeader,
+    ErrorIncorrectPFSFileSize,
+    ErrorBadNCAHeader,
+    ErrorMissingProductionKeyFile,
+    ErrorMissingHeaderKey,
+    ErrorIncorrectHeaderKey,
+    ErrorNCA2,
+    ErrorNCA0,
+    ErrorMissingTitlekey,
+    ErrorMissingTitlekek,
+    ErrorInvalidRightsID,
+    ErrorMissingKeyAreaKey,
+    ErrorIncorrectKeyAreaKey,
+    ErrorIncorrectTitlekeyOrTitlekek,
+    ErrorXCIMissingProgramNCA,
+    ErrorNCANotProgram,
+    ErrorNoExeFS,
+    ErrorBadXCIHeader,
+    ErrorXCIMissingPartition,
+    ErrorNullFile,
+    ErrorMissingNPDM,
+    Error32BitISA,
+    ErrorUnableToParseKernelMetadata,
+    ErrorNoRomFS,
+    ErrorIncorrectELFFileSize,
+    ErrorLoadingNRO,
+    ErrorLoadingNSO,
+    ErrorNoIcon,
+    ErrorNoControl,
+    ErrorBadNAXHeader,
+    ErrorIncorrectNAXFileSize,
+    ErrorNAXKeyHMACFailed,
+    ErrorNAXValidationHMACFailed,
+    ErrorNAXKeyDerivationFailed,
+    ErrorNAXInconvertibleToNCA,
+    ErrorBadNAXFilePath,
+    ErrorMissingSDSeed,
+    ErrorMissingSDKEKSource,
+    ErrorMissingAESKEKGenerationSource,
+    ErrorMissingAESKeyGenerationSource,
+    ErrorMissingSDSaveKeySource,
+    ErrorMissingSDNCAKeySource,
+    ErrorNSPMissingProgramNCA,
+    ErrorBadBKTRHeader,
+    ErrorBKTRSubsectionNotAfterRelocation,
+    ErrorBKTRSubsectionNotAtEnd,
+    ErrorBadRelocationBlock,
+    ErrorBadSubsectionBlock,
+    ErrorBadRelocationBuckets,
+    ErrorBadSubsectionBuckets,
+    ErrorMissingBKTRBaseRomFS,
+    ErrorNoPackedUpdate,
 };
+
+std::ostream& operator<<(std::ostream& os, ResultStatus status);
 
 /// Interface for loading an application
 class AppLoader : NonCopyable {
 public:
-    AppLoader(FileUtil::IOFile&& file) : file(std::move(file)) {}
-    virtual ~AppLoader() {}
+    explicit AppLoader(FileSys::VirtualFile file);
+    virtual ~AppLoader();
 
     /**
      * Returns the type of this file
      * @return FileType corresponding to the loaded file
      */
-    virtual FileType GetFileType() = 0;
+    virtual FileType GetFileType() const = 0;
 
     /**
      * Load the application and return the created Process instance
      * @param process The newly created process.
      * @return The status result of the operation.
      */
-    virtual ResultStatus Load(Kernel::SharedPtr<Kernel::Process>& process) = 0;
+    virtual ResultStatus Load(Kernel::Process& process) = 0;
 
     /**
      * Loads the system mode that this application needs.
@@ -100,7 +153,7 @@ public:
      * information.
      * @returns A pair with the optional system mode, and and the status.
      */
-    virtual std::pair<boost::optional<u32>, ResultStatus> LoadKernelSystemMode() {
+    virtual std::pair<std::optional<u32>, ResultStatus> LoadKernelSystemMode() {
         // 96MB allocated to the application.
         return std::make_pair(2, ResultStatus::Success);
     }
@@ -125,6 +178,8 @@ public:
 
     /**
      * Get the banner (typically banner section) of the application
+     * In the context of NX, this is the animation that displays in the bottom right of the screen
+     * when a game boots. Stored in GIF format.
      * @param buffer Reference to buffer to store data
      * @return ResultStatus result of function
      */
@@ -134,6 +189,8 @@ public:
 
     /**
      * Get the logo (typically logo section) of the application
+     * In the context of NX, this is the static image that displays in the top left of the screen
+     * when a game boots. Stored in JPEG format.
      * @param buffer Reference to buffer to store data
      * @return ResultStatus result of function
      */
@@ -153,27 +210,39 @@ public:
     /**
      * Get the RomFS of the application
      * Since the RomFS can be huge, we return a file reference instead of copying to a buffer
-     * @param romfs_file The file containing the RomFS
-     * @param offset The offset the romfs begins on
-     * @param size The size of the romfs
+     * @param file The directory containing the RomFS
      * @return ResultStatus result of function
      */
-    virtual ResultStatus ReadRomFS(std::shared_ptr<FileUtil::IOFile>& romfs_file, u64& offset,
-                                   u64& size) {
+    virtual ResultStatus ReadRomFS(FileSys::VirtualFile& file) {
         return ResultStatus::ErrorNotImplemented;
     }
 
     /**
-     * Get the update RomFS of the application
-     * Since the RomFS can be huge, we return a file reference instead of copying to a buffer
-     * @param romfs_file The file containing the RomFS
-     * @param offset The offset the romfs begins on
-     * @param size The size of the romfs
+     * Get the raw update of the application, should it come packed with one
+     * @param file The raw update NCA file (Program-type
      * @return ResultStatus result of function
      */
-    virtual ResultStatus ReadUpdateRomFS(std::shared_ptr<FileUtil::IOFile>& romfs_file, u64& offset,
-                                         u64& size) {
+    virtual ResultStatus ReadUpdateRaw(FileSys::VirtualFile& file) {
         return ResultStatus::ErrorNotImplemented;
+    }
+
+    /**
+     * Get whether or not updates can be applied to the RomFS.
+     * By default, this is true, however for formats where it cannot be guaranteed that the RomFS is
+     * the base game it should be set to false.
+     * @return bool whether or not updatable.
+     */
+    virtual bool IsRomFSUpdatable() const {
+        return true;
+    }
+
+    /**
+     * Gets the difference between the start of the IVFC header and the start of level 6 (RomFS)
+     * data. Needed for bktr patching.
+     * @return IVFC offset for romfs.
+     */
+    virtual u64 ReadRomFSIVFCOffset() const {
+        return 0;
     }
 
     /**
@@ -185,22 +254,34 @@ public:
         return ResultStatus::ErrorNotImplemented;
     }
 
+    /**
+     * Get the control data (CNMT) of the application
+     * @param control Reference to store the application control data into
+     * @return ResultStatus result of function
+     */
+    virtual ResultStatus ReadControlData(FileSys::NACP& control) {
+        return ResultStatus::ErrorNotImplemented;
+    }
+
+    /**
+     * Get the RomFS of the manual of the application
+     * @param file The raw manual RomFS of the game
+     * @return ResultStatus result of function
+     */
+    virtual ResultStatus ReadManualRomFS(FileSys::VirtualFile& file) {
+        return ResultStatus::ErrorNotImplemented;
+    }
+
 protected:
-    FileUtil::IOFile file;
+    FileSys::VirtualFile file;
     bool is_loaded = false;
 };
 
 /**
- * Common address mappings found in most games, used for binary formats that don't have this
- * information.
- */
-extern const std::initializer_list<Kernel::AddressMapping> default_address_mappings;
-
-/**
  * Identifies a bootable file and return a suitable loader
- * @param filename String filename of bootable file
- * @return best loader for this file
+ * @param file The bootable file
+ * @return the best loader for this file
  */
-std::unique_ptr<AppLoader> GetLoader(const std::string& filename);
+std::unique_ptr<AppLoader> GetLoader(FileSys::VirtualFile file);
 
 } // namespace Loader

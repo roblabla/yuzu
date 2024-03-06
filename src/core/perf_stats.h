@@ -10,6 +10,17 @@
 
 namespace Core {
 
+struct PerfStatsResults {
+    /// System FPS (LCD VBlanks) in Hz
+    double system_fps;
+    /// Game FPS (GSP frame submissions) in Hz
+    double game_fps;
+    /// Walltime per system frame, in seconds, excluding any waits
+    double frametime;
+    /// Ratio of walltime / emulated time elapsed
+    double emulation_speed;
+};
+
 /**
  * Class to manage and query performance/timing statistics. All public functions of this class are
  * thread-safe unless stated otherwise.
@@ -18,22 +29,11 @@ class PerfStats {
 public:
     using Clock = std::chrono::high_resolution_clock;
 
-    struct Results {
-        /// System FPS (LCD VBlanks) in Hz
-        double system_fps;
-        /// Game FPS (GSP frame submissions) in Hz
-        double game_fps;
-        /// Walltime per system frame, in seconds, excluding any waits
-        double frametime;
-        /// Ratio of walltime / emulated time elapsed
-        double emulation_speed;
-    };
-
     void BeginSystemFrame();
     void EndSystemFrame();
     void EndGameFrame();
 
-    Results GetAndResetStats(u64 current_system_time_us);
+    PerfStatsResults GetAndResetStats(std::chrono::microseconds current_system_time_us);
 
     /**
      * Gets the ratio between walltime and the emulated time of the previous system frame. This is
@@ -47,7 +47,7 @@ private:
     /// Point when the cumulative counters were reset
     Clock::time_point reset_point = Clock::now();
     /// System time when the cumulative counters were reset
-    u64 reset_point_system_us = 0;
+    std::chrono::microseconds reset_point_system_us{0};
 
     /// Cumulative duration (excluding v-sync/frame-limiting) of frames since last reset
     Clock::duration accumulated_frametime = Clock::duration::zero();
@@ -68,11 +68,11 @@ class FrameLimiter {
 public:
     using Clock = std::chrono::high_resolution_clock;
 
-    void DoFrameLimiting(u64 current_system_time_us);
+    void DoFrameLimiting(std::chrono::microseconds current_system_time_us);
 
 private:
     /// Emulated system time (in microseconds) at the last limiter invocation
-    u64 previous_system_time_us = 0;
+    std::chrono::microseconds previous_system_time_us{0};
     /// Walltime at the last limiter invocation
     Clock::time_point previous_walltime = Clock::now();
 

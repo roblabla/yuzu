@@ -4,150 +4,39 @@
 
 #pragma once
 
-#include <memory>
-#include <boost/optional.hpp>
-#include "core/hle/kernel/event.h"
 #include "core/hle/service/service.h"
 
-namespace CoreTiming {
-struct EventType;
+namespace Service::NVFlinger {
+class NVFlinger;
 }
 
-namespace Service {
-namespace VI {
+namespace Service::VI {
 
-struct IGBPBuffer {
-    u32_le magic;
-    u32_le width;
-    u32_le height;
-    u32_le stride;
-    u32_le format;
-    u32_le usage;
-    INSERT_PADDING_WORDS(1);
-    u32_le index;
-    INSERT_PADDING_WORDS(3);
-    u32_le gpu_buffer_id;
-    INSERT_PADDING_WORDS(17);
-    u32_le nvmap_handle;
-    u32_le offset;
-    INSERT_PADDING_WORDS(60);
+enum class DisplayResolution : u32 {
+    DockedWidth = 1920,
+    DockedHeight = 1080,
+    UndockedWidth = 1280,
+    UndockedHeight = 720,
 };
 
-static_assert(sizeof(IGBPBuffer) == 0x16C, "IGBPBuffer has wrong size");
-
-class BufferQueue {
+class Module final {
 public:
-    BufferQueue(u32 id, u64 layer_id);
-    ~BufferQueue() = default;
+    class Interface : public ServiceFramework<Interface> {
+    public:
+        explicit Interface(std::shared_ptr<Module> module, const char* name,
+                           std::shared_ptr<NVFlinger::NVFlinger> nv_flinger);
+        ~Interface() override;
 
-    struct Buffer {
-        enum class Status { Free = 0, Queued = 1, Dequeued = 2, Acquired = 3 };
+        void GetDisplayService(Kernel::HLERequestContext& ctx);
 
-        u32 slot;
-        Status status = Status::Free;
-        IGBPBuffer igbp_buffer;
+    protected:
+        std::shared_ptr<Module> module;
+        std::shared_ptr<NVFlinger::NVFlinger> nv_flinger;
     };
-
-    void SetPreallocatedBuffer(u32 slot, IGBPBuffer& buffer);
-    u32 DequeueBuffer(u32 pixel_format, u32 width, u32 height);
-    const IGBPBuffer& RequestBuffer(u32 slot) const;
-    void QueueBuffer(u32 slot);
-    boost::optional<const Buffer&> AcquireBuffer();
-    void ReleaseBuffer(u32 slot);
-
-    u32 GetId() const {
-        return id;
-    }
-
-private:
-    u32 id;
-    u64 layer_id;
-
-    std::vector<Buffer> queue;
-};
-
-struct Layer {
-    Layer(u64 id, std::shared_ptr<BufferQueue> queue);
-    ~Layer() = default;
-
-    u64 id;
-    std::shared_ptr<BufferQueue> buffer_queue;
-};
-
-struct Display {
-    Display(u64 id, std::string name);
-    ~Display() = default;
-
-    u64 id;
-    std::string name;
-
-    std::vector<Layer> layers;
-    Kernel::SharedPtr<Kernel::Event> vsync_event;
-};
-
-class NVFlinger {
-public:
-    NVFlinger();
-    ~NVFlinger();
-
-    /// Opens the specified display and returns the id.
-    u64 OpenDisplay(const std::string& name);
-
-    /// Creates a layer on the specified display and returns the layer id.
-    u64 CreateLayer(u64 display_id);
-
-    /// Gets the buffer queue id of the specified layer in the specified display.
-    u32 GetBufferQueueId(u64 display_id, u64 layer_id);
-
-    /// Gets the vsync event for the specified display.
-    Kernel::SharedPtr<Kernel::Event> GetVsyncEvent(u64 display_id);
-
-    /// Obtains a buffer queue identified by the id.
-    std::shared_ptr<BufferQueue> GetBufferQueue(u32 id) const;
-
-    /// Performs a composition request to the emulated nvidia GPU and triggers the vsync events when
-    /// finished.
-    void Compose();
-
-private:
-    /// Returns the display identified by the specified id.
-    Display& GetDisplay(u64 display_id);
-
-    /// Returns the layer identified by the specified id in the desired display.
-    Layer& GetLayer(u64 display_id, u64 layer_id);
-
-    std::vector<Display> displays;
-    std::vector<std::shared_ptr<BufferQueue>> buffer_queues;
-
-    /// Id to use for the next layer that is created, this counter is shared among all displays.
-    u64 next_layer_id = 1;
-    /// Id to use for the next buffer queue that is created, this counter is shared among all
-    /// layers.
-    u32 next_buffer_queue_id = 1;
-
-    /// CoreTiming event that handles screen composition.
-    CoreTiming::EventType* composition_event;
-};
-
-class IApplicationDisplayService final : public ServiceFramework<IApplicationDisplayService> {
-public:
-    IApplicationDisplayService(std::shared_ptr<NVFlinger> nv_flinger);
-    ~IApplicationDisplayService() = default;
-
-private:
-    void GetRelayService(Kernel::HLERequestContext& ctx);
-    void GetSystemDisplayService(Kernel::HLERequestContext& ctx);
-    void GetManagerDisplayService(Kernel::HLERequestContext& ctx);
-    void OpenDisplay(Kernel::HLERequestContext& ctx);
-    void SetLayerScalingMode(Kernel::HLERequestContext& ctx);
-    void OpenLayer(Kernel::HLERequestContext& ctx);
-    void GetDisplayVsyncEvent(Kernel::HLERequestContext& ctx);
-
-    std::shared_ptr<NVFlinger> nv_flinger;
 };
 
 /// Registers all VI services with the specified service manager.
-void InstallInterfaces(SM::ServiceManager& service_manager);
+void InstallInterfaces(SM::ServiceManager& service_manager,
+                       std::shared_ptr<NVFlinger::NVFlinger> nv_flinger);
 
-} // namespace VI
-} // namespace Service
+} // namespace Service::VI

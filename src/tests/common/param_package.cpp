@@ -2,7 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include <catch.hpp>
+#include <catch2/catch.hpp>
 #include <math.h>
 #include "common/param_package.h"
 
@@ -10,7 +10,9 @@ namespace Common {
 
 TEST_CASE("ParamPackage", "[common]") {
     ParamPackage original{
-        {"abc", "xyz"}, {"def", "42"}, {"jkl", "$$:1:$2$,3"},
+        {"abc", "xyz"},
+        {"def", "42"},
+        {"jkl", "$$:1:$2$,3"},
     };
     original.Set("ghi", 3.14f);
     ParamPackage copy(original.Serialize());

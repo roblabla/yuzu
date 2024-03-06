@@ -2,29 +2,62 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#ifndef _CITRA_QT_MAIN_HXX_
-#define _CITRA_QT_MAIN_HXX_
+#pragma once
 
 #include <memory>
+#include <optional>
+#include <unordered_map>
+
 #include <QMainWindow>
 #include <QTimer>
+
+#include "common/common_types.h"
 #include "core/core.h"
+#include "core/hle/service/acc/profile_manager.h"
 #include "ui_main.h"
+#include "yuzu/compatibility_list.h"
+#include "yuzu/hotkeys.h"
 
 class Config;
 class EmuThread;
 class GameList;
 class GImageInfo;
-class GPUCommandStreamWidget;
-class GPUCommandListWidget;
 class GraphicsBreakPointsWidget;
-class GraphicsTracingWidget;
-class GraphicsVertexShaderWidget;
+class GraphicsSurfaceWidget;
 class GRenderWindow;
+class LoadingScreen;
 class MicroProfileDialog;
 class ProfilerWidget;
-class RegistersWidget;
+class QLabel;
 class WaitTreeWidget;
+enum class GameListOpenTarget;
+
+namespace Core::Frontend {
+struct SoftwareKeyboardParameters;
+} // namespace Core::Frontend
+
+namespace FileSys {
+class RegisteredCacheUnion;
+class VfsFilesystem;
+} // namespace FileSys
+
+namespace Tegra {
+class DebugContext;
+}
+
+enum class EmulatedDirectoryTarget {
+    NAND,
+    SDMC,
+};
+
+enum class ReinitializeKeyBehavior {
+    NoWarning,
+    Warning,
+};
+
+namespace DiscordRPC {
+class DiscordInterface;
+}
 
 class GMainWindow : public QMainWindow {
     Q_OBJECT
@@ -44,7 +77,9 @@ public:
     void filterBarSetChecked(bool state);
     void UpdateUITheme();
     GMainWindow();
-    ~GMainWindow();
+    ~GMainWindow() override;
+
+    std::unique_ptr<DiscordRPC::DiscordInterface> discord_rpc;
 
 signals:
 
@@ -64,6 +99,23 @@ signals:
      */
     void EmulationStopping();
 
+    // Signal that tells widgets to update icons to use the current theme
+    void UpdateThemedIcons();
+
+    void ProfileSelectorFinishedSelection(std::optional<Service::Account::UUID> uuid);
+    void SoftwareKeyboardFinishedText(std::optional<std::u16string> text);
+    void SoftwareKeyboardFinishedCheckDialog();
+
+    void WebBrowserUnpackRomFS();
+    void WebBrowserFinishedBrowsing();
+
+public slots:
+    void OnLoadComplete();
+    void ProfileSelectorSelectProfile();
+    void SoftwareKeyboardGetText(const Core::Frontend::SoftwareKeyboardParameters& parameters);
+    void SoftwareKeyboardInvokeCheckDialog(std::u16string error_message);
+    void WebBrowserOpenPage(std::string_view filename, std::string_view arguments);
+
 private:
     void InitializeWidgets();
     void InitializeDebugWidgets();
@@ -76,11 +128,15 @@ private:
     void ConnectWidgetEvents();
     void ConnectMenuEvents();
 
+    QStringList GetUnsupportedGLExtensions();
     bool LoadROM(const QString& filename);
     void BootGame(const QString& filename);
     void ShutdownGame();
 
-    void ShowCallouts();
+    void ShowTelemetryCallout();
+    void SetDiscordEnabled(bool state);
+
+    void SelectAndSetCurrentUser();
 
     /**
      * Stores the filename in the recently loaded files list.
@@ -116,27 +172,48 @@ private slots:
     void OnStartGame();
     void OnPauseGame();
     void OnStopGame();
+    void OnMenuReportCompatibility();
     /// Called whenever a user selects a game in the game list widget.
     void OnGameListLoadFile(QString game_path);
-    void OnGameListOpenSaveFolder(u64 program_id);
+    void OnGameListOpenFolder(u64 program_id, GameListOpenTarget target);
+    void OnGameListDumpRomFS(u64 program_id, const std::string& game_path);
+    void OnGameListCopyTID(u64 program_id);
+    void OnGameListNavigateToGamedbEntry(u64 program_id,
+                                         const CompatibilityList& compatibility_list);
+    void OnGameListOpenPerGameProperties(const std::string& file);
     void OnMenuLoadFile();
+    void OnMenuLoadFolder();
+    void OnMenuInstallToNAND();
     /// Called whenever a user selects the "File->Select Game List Root" menu item
     void OnMenuSelectGameListRoot();
+    /// Called whenever a user select the "File->Select -- Directory" where -- is NAND or SD Card
+    void OnMenuSelectEmulatedDirectory(EmulatedDirectoryTarget target);
     void OnMenuRecentFile();
     void OnConfigure();
+    void OnLoadAmiibo();
+    void OnOpenYuzuFolder();
+    void OnAbout();
     void OnToggleFilterBar();
     void OnDisplayTitleBars(bool);
+    void ToggleFullscreen();
+    void ShowFullscreen();
+    void HideFullscreen();
     void ToggleWindowMode();
-    void OnCreateGraphicsSurfaceViewer();
+    void OnCaptureScreenshot();
     void OnCoreError(Core::System::ResultStatus, std::string);
+    void OnReinitializeKeys(ReinitializeKeyBehavior behavior);
 
 private:
+    std::optional<u64> SelectRomFSDumpTarget(const FileSys::RegisteredCacheUnion&, u64 program_id);
     void UpdateStatusBar();
 
     Ui::MainWindow ui;
 
+    std::shared_ptr<Tegra::DebugContext> debug_context;
+
     GRenderWindow* render_window;
     GameList* game_list;
+    LoadingScreen* loading_screen;
 
     // Status bar elements
     QLabel* message_label = nullptr;
@@ -147,22 +224,31 @@ private:
 
     std::unique_ptr<Config> config;
 
-    // Whether emulation is currently running in Citra.
+    // Whether emulation is currently running in yuzu.
     bool emulation_running = false;
     std::unique_ptr<EmuThread> emu_thread;
+    // The path to the game currently running
+    QString game_path;
+
+    // FS
+    std::shared_ptr<FileSys::VfsFilesystem> vfs;
 
     // Debugger panes
     ProfilerWidget* profilerWidget;
     MicroProfileDialog* microProfileDialog;
-    RegistersWidget* registersWidget;
+    GraphicsBreakPointsWidget* graphicsBreakpointsWidget;
+    GraphicsSurfaceWidget* graphicsSurfaceWidget;
     WaitTreeWidget* waitTreeWidget;
 
     QAction* actions_recent_files[max_recent_files_item];
+
+    // stores default icon theme search paths for the platform
+    QStringList default_theme_paths;
+
+    HotkeyRegistry hotkey_registry;
 
 protected:
     void dropEvent(QDropEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;
 };
-
-#endif // _CITRA_QT_MAIN_HXX_

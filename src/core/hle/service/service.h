@@ -6,12 +6,10 @@
 
 #include <cstddef>
 #include <string>
-#include <unordered_map>
 #include <boost/container/flat_map.hpp>
-#include "common/bit_field.h"
 #include "common/common_types.h"
 #include "core/hle/kernel/hle_ipc.h"
-#include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/object.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Namespace Service
@@ -21,6 +19,10 @@ class ClientPort;
 class ServerPort;
 class ServerSession;
 class HLERequestContext;
+} // namespace Kernel
+
+namespace FileSys {
+class VfsFilesystem;
 }
 
 namespace Service {
@@ -86,7 +88,7 @@ private:
     ServiceFrameworkBase(const char* service_name, u32 max_sessions, InvokerFn* handler_invoker);
     ~ServiceFrameworkBase();
 
-    void RegisterHandlersBase(const FunctionInfoBase* functions, size_t n);
+    void RegisterHandlersBase(const FunctionInfoBase* functions, std::size_t n);
     void ReportUnimplementedFunction(Kernel::HLERequestContext& ctx, const FunctionInfoBase* info);
 
     /// Identifier string used to connect to the service.
@@ -94,11 +96,9 @@ private:
     /// Maximum number of concurrent sessions that this service can handle.
     u32 max_sessions;
 
-    /**
-     * Port where incoming connections will be received. Only created when InstallAsService() or
-     * InstallAsNamedPort() are called.
-     */
-    Kernel::SharedPtr<Kernel::ServerPort> port;
+    /// Flag to store if a port was already create/installed to detect multiple install attempts,
+    /// which is not supported.
+    bool port_installed = false;
 
     /// Function used to safely up-cast pointers to the derived class before invoking a handler.
     InvokerFn* handler_invoker;
@@ -146,11 +146,11 @@ protected:
      * @param max_sessions Maximum number of sessions that can be
      * connected to this service at the same time.
      */
-    ServiceFramework(const char* service_name, u32 max_sessions = DefaultMaxSessions)
+    explicit ServiceFramework(const char* service_name, u32 max_sessions = DefaultMaxSessions)
         : ServiceFrameworkBase(service_name, max_sessions, Invoker) {}
 
     /// Registers handlers in the service.
-    template <size_t N>
+    template <std::size_t N>
     void RegisterHandlers(const FunctionInfo (&functions)[N]) {
         RegisterHandlers(functions, N);
     }
@@ -159,7 +159,7 @@ protected:
      * Registers handlers in the service. Usually prefer using the other RegisterHandlers
      * overload in order to avoid needing to specify the array size.
      */
-    void RegisterHandlers(const FunctionInfo* functions, size_t n) {
+    void RegisterHandlers(const FunctionInfo* functions, std::size_t n) {
         RegisterHandlersBase(functions, n);
     }
 
@@ -178,15 +178,9 @@ private:
 };
 
 /// Initialize ServiceManager
-void Init();
+void Init(std::shared_ptr<SM::ServiceManager>& sm, FileSys::VfsFilesystem& vfs);
 
 /// Shutdown ServiceManager
 void Shutdown();
 
-/// Map of named ports managed by the kernel, which can be retrieved using the ConnectToPort SVC.
-extern std::unordered_map<std::string, Kernel::SharedPtr<Kernel::ClientPort>> g_kernel_named_ports;
-
-/// Adds a port to the named port table
-void AddNamedPort(std::string name, Kernel::SharedPtr<Kernel::ClientPort> port);
-
-} // namespace
+} // namespace Service

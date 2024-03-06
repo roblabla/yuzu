@@ -31,15 +31,15 @@
 #include <cstdlib>
 #include <QLineEdit>
 #include <QRegExpValidator>
-#include "yuzu/util/spinbox.h"
 #include "common/assert.h"
+#include "yuzu/util/spinbox.h"
 
 CSpinBox::CSpinBox(QWidget* parent)
     : QAbstractSpinBox(parent), min_value(-100), max_value(100), value(0), base(10), num_digits(0) {
     // TODO: Might be nice to not immediately call the slot.
     //       Think of an address that is being replaced by a different one, in which case a lot
     //       invalid intermediate addresses would be read from during editing.
-    connect(lineEdit(), SIGNAL(textEdited(QString)), this, SLOT(OnEditingFinished()));
+    connect(lineEdit(), &QLineEdit::textEdited, this, &CSpinBox::OnEditingFinished);
 
     UpdateText();
 }

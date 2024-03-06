@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <future>
 #include <memory>
+#include <string>
 #include "common/telemetry.h"
 
 namespace Core {
@@ -31,6 +31,12 @@ public:
         field_collection.AddField(type, name, std::move(value));
     }
 
+    /**
+     * Submits a Testcase.
+     * @returns A bool indicating whether the submission succeeded
+     */
+    bool SubmitTestcase();
+
 private:
     Telemetry::FieldCollection field_collection; ///< Tracks all added fields for the session
     std::unique_ptr<Telemetry::VisitorInterface> backend; ///< Backend interface that logs fields
@@ -50,11 +56,10 @@ u64 RegenerateTelemetryId();
 
 /**
  * Verifies the username and token.
- * @param username Citra username to use for authentication.
- * @param token Citra token to use for authentication.
- * @param func A function that gets exectued when the verification is finished
+ * @param username yuzu username to use for authentication.
+ * @param token yuzu token to use for authentication.
  * @returns Future with bool indicating whether the verification succeeded
  */
-std::future<bool> VerifyLogin(std::string username, std::string token, std::function<void()> func);
+bool VerifyLogin(const std::string& username, const std::string& token);
 
 } // namespace Core

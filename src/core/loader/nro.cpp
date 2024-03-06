@@ -2,15 +2,25 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <utility>
 #include <vector>
 
 #include "common/common_funcs.h"
+#include "common/common_types.h"
+#include "common/file_util.h"
 #include "common/logging/log.h"
 #include "common/swap.h"
+#include "core/file_sys/control_metadata.h"
+#include "core/file_sys/romfs_factory.h"
+#include "core/file_sys/vfs_offset.h"
+#include "core/gdbstub/gdbstub.h"
 #include "core/hle/kernel/process.h"
-#include "core/hle/kernel/resource_limit.h"
+#include "core/hle/kernel/vm_manager.h"
+#include "core/hle/service/filesystem/filesystem.h"
 #include "core/loader/nro.h"
+#include "core/loader/nso.h"
 #include "core/memory.h"
+#include "core/settings.h"
 
 namespace Loader {
 
@@ -45,11 +55,67 @@ struct ModHeader {
 };
 static_assert(sizeof(ModHeader) == 0x1c, "ModHeader has incorrect size.");
 
-FileType AppLoader_NRO::IdentifyType(FileUtil::IOFile& file) {
+struct AssetSection {
+    u64_le offset;
+    u64_le size;
+};
+static_assert(sizeof(AssetSection) == 0x10, "AssetSection has incorrect size.");
+
+struct AssetHeader {
+    u32_le magic;
+    u32_le format_version;
+    AssetSection icon;
+    AssetSection nacp;
+    AssetSection romfs;
+};
+static_assert(sizeof(AssetHeader) == 0x38, "AssetHeader has incorrect size.");
+
+AppLoader_NRO::AppLoader_NRO(FileSys::VirtualFile file) : AppLoader(file) {
+    NroHeader nro_header{};
+    if (file->ReadObject(&nro_header) != sizeof(NroHeader)) {
+        return;
+    }
+
+    if (file->GetSize() >= nro_header.file_size + sizeof(AssetHeader)) {
+        const u64 offset = nro_header.file_size;
+        AssetHeader asset_header{};
+        if (file->ReadObject(&asset_header, offset) != sizeof(AssetHeader)) {
+            return;
+        }
+
+        if (asset_header.format_version != 0) {
+            LOG_WARNING(Loader,
+                        "NRO Asset Header has format {}, currently supported format is 0. If "
+                        "strange glitches occur with metadata, check NRO assets.",
+                        asset_header.format_version);
+        }
+
+        if (asset_header.magic != Common::MakeMagic('A', 'S', 'E', 'T')) {
+            return;
+        }
+
+        if (asset_header.nacp.size > 0) {
+            nacp = std::make_unique<FileSys::NACP>(std::make_shared<FileSys::OffsetVfsFile>(
+                file, asset_header.nacp.size, offset + asset_header.nacp.offset, "Control.nacp"));
+        }
+
+        if (asset_header.romfs.size > 0) {
+            romfs = std::make_shared<FileSys::OffsetVfsFile>(
+                file, asset_header.romfs.size, offset + asset_header.romfs.offset, "game.romfs");
+        }
+
+        if (asset_header.icon.size > 0) {
+            icon_data = file->ReadBytes(asset_header.icon.size, offset + asset_header.icon.offset);
+        }
+    }
+}
+
+AppLoader_NRO::~AppLoader_NRO() = default;
+
+FileType AppLoader_NRO::IdentifyType(const FileSys::VirtualFile& file) {
     // Read NSO header
     NroHeader nro_header{};
-    file.Seek(0, SEEK_SET);
-    if (sizeof(NroHeader) != file.ReadBytes(&nro_header, sizeof(NroHeader))) {
+    if (sizeof(NroHeader) != file->ReadObject(&nro_header)) {
         return FileType::Error;
     }
     if (nro_header.magic == Common::MakeMagic('N', 'R', 'O', '0')) {
@@ -62,102 +128,137 @@ static constexpr u32 PageAlignSize(u32 size) {
     return (size + Memory::PAGE_MASK) & ~Memory::PAGE_MASK;
 }
 
-static std::vector<u8> ReadSegment(FileUtil::IOFile& file, const NroSegmentHeader& header) {
-    std::vector<u8> data;
-    data.resize(header.size);
-
-    file.Seek(header.offset + sizeof(NroHeader), SEEK_SET);
-    size_t bytes_read{file.ReadBytes(data.data(), header.size)};
-    if (header.size != PageAlignSize(static_cast<u32>(bytes_read))) {
-        LOG_CRITICAL(Loader, "Failed to read NRO segment bytes", header.size);
-        return {};
-    }
-
-    return data;
-}
-
-bool AppLoader_NRO::LoadNro(const std::string& path, VAddr load_base) {
-    FileUtil::IOFile file(path, "rb");
-    if (!file.IsOpen()) {
+static bool LoadNroImpl(Kernel::Process& process, const std::vector<u8>& data,
+                        const std::string& name, VAddr load_base) {
+    if (data.size() < sizeof(NroHeader)) {
         return {};
     }
 
     // Read NSO header
     NroHeader nro_header{};
-    file.Seek(0, SEEK_SET);
-    if (sizeof(NroHeader) != file.ReadBytes(&nro_header, sizeof(NroHeader))) {
-        return {};
-    }
+    std::memcpy(&nro_header, data.data(), sizeof(NroHeader));
     if (nro_header.magic != Common::MakeMagic('N', 'R', 'O', '0')) {
         return {};
     }
 
     // Build program image
-    Kernel::SharedPtr<Kernel::CodeSet> codeset = Kernel::CodeSet::Create("", 0);
-    std::vector<u8> program_image;
-    program_image.resize(PageAlignSize(nro_header.file_size + nro_header.bss_size));
-    file.Seek(0, SEEK_SET);
-    file.ReadBytes(program_image.data(), nro_header.file_size);
-
-    for (int i = 0; i < nro_header.segments.size(); ++i) {
-        codeset->segments[i].addr = nro_header.segments[i].offset;
-        codeset->segments[i].offset = nro_header.segments[i].offset;
-        codeset->segments[i].size = PageAlignSize(nro_header.segments[i].size);
+    std::vector<u8> program_image(PageAlignSize(nro_header.file_size));
+    std::memcpy(program_image.data(), data.data(), program_image.size());
+    if (program_image.size() != PageAlignSize(nro_header.file_size)) {
+        return {};
     }
+
+    Kernel::CodeSet codeset;
+    for (std::size_t i = 0; i < nro_header.segments.size(); ++i) {
+        codeset.segments[i].addr = nro_header.segments[i].offset;
+        codeset.segments[i].offset = nro_header.segments[i].offset;
+        codeset.segments[i].size = PageAlignSize(nro_header.segments[i].size);
+    }
+
+    if (!Settings::values.program_args.empty()) {
+        const auto arg_data = Settings::values.program_args;
+        codeset.DataSegment().size += NSO_ARGUMENT_DATA_ALLOCATION_SIZE;
+        NSOArgumentHeader args_header{
+            NSO_ARGUMENT_DATA_ALLOCATION_SIZE, static_cast<u32_le>(arg_data.size()), {}};
+        const auto end_offset = program_image.size();
+        program_image.resize(static_cast<u32>(program_image.size()) +
+                             NSO_ARGUMENT_DATA_ALLOCATION_SIZE);
+        std::memcpy(program_image.data() + end_offset, &args_header, sizeof(NSOArgumentHeader));
+        std::memcpy(program_image.data() + end_offset + sizeof(NSOArgumentHeader), arg_data.data(),
+                    arg_data.size());
+    }
+
+    // Default .bss to NRO header bss size if MOD0 section doesn't exist
+    u32 bss_size{PageAlignSize(nro_header.bss_size)};
 
     // Read MOD header
     ModHeader mod_header{};
-    u32 bss_size{Memory::PAGE_SIZE}; // Default .bss to page size if MOD0 section doesn't exist
     std::memcpy(&mod_header, program_image.data() + nro_header.module_header_offset,
                 sizeof(ModHeader));
+
     const bool has_mod_header{mod_header.magic == Common::MakeMagic('M', 'O', 'D', '0')};
     if (has_mod_header) {
         // Resize program image to include .bss section and page align each section
         bss_size = PageAlignSize(mod_header.bss_end_offset - mod_header.bss_start_offset);
-        codeset->data.size += bss_size;
     }
-    program_image.resize(PageAlignSize(static_cast<u32>(program_image.size()) + bss_size));
 
-    // Relocate symbols if there was a proper MOD header - This must happen after the image has been
-    // loaded into memory
-    if (has_mod_header) {
-        Relocate(program_image, nro_header.module_header_offset + mod_header.dynamic_offset,
-                 load_base);
-    }
+    codeset.DataSegment().size += bss_size;
+    program_image.resize(static_cast<u32>(program_image.size()) + bss_size);
 
     // Load codeset for current process
-    codeset->name = path;
-    codeset->memory = std::make_shared<std::vector<u8>>(std::move(program_image));
-    Kernel::g_current_process->LoadModule(codeset, load_base);
+    codeset.memory = std::make_shared<std::vector<u8>>(std::move(program_image));
+    process.LoadModule(std::move(codeset), load_base);
+
+    // Register module with GDBStub
+    GDBStub::RegisterModule(name, load_base, load_base);
 
     return true;
 }
 
-ResultStatus AppLoader_NRO::Load(Kernel::SharedPtr<Kernel::Process>& process) {
+bool AppLoader_NRO::LoadNro(Kernel::Process& process, const FileSys::VfsFile& file,
+                            VAddr load_base) {
+    return LoadNroImpl(process, file.ReadAllBytes(), file.GetName(), load_base);
+}
+
+ResultStatus AppLoader_NRO::Load(Kernel::Process& process) {
     if (is_loaded) {
         return ResultStatus::ErrorAlreadyLoaded;
     }
-    if (!file.IsOpen()) {
-        return ResultStatus::Error;
+
+    // Load NRO
+    const VAddr base_address = process.VMManager().GetCodeRegionBaseAddress();
+
+    if (!LoadNro(process, *file, base_address)) {
+        return ResultStatus::ErrorLoadingNRO;
     }
 
-    // Load and relocate "main" and "sdk" NSO
-    static constexpr VAddr base_addr{Memory::PROCESS_IMAGE_VADDR};
-    process = Kernel::Process::Create("main");
-    if (!LoadNro(filepath, base_addr)) {
-        return ResultStatus::ErrorInvalidFormat;
-    }
+    if (romfs != nullptr)
+        Service::FileSystem::RegisterRomFS(std::make_unique<FileSys::RomFSFactory>(*this));
 
-    process->svc_access_mask.set();
-    process->address_mappings = default_address_mappings;
-    process->resource_limit =
-        Kernel::ResourceLimit::GetForCategory(Kernel::ResourceLimitCategory::APPLICATION);
-    process->Run(base_addr, 48, Kernel::DEFAULT_STACK_SIZE);
-
-    ResolveImports();
+    process.Run(base_address, Kernel::THREADPRIO_DEFAULT, Memory::DEFAULT_STACK_SIZE);
 
     is_loaded = true;
     return ResultStatus::Success;
+}
+
+ResultStatus AppLoader_NRO::ReadIcon(std::vector<u8>& buffer) {
+    if (icon_data.empty()) {
+        return ResultStatus::ErrorNoIcon;
+    }
+
+    buffer = icon_data;
+    return ResultStatus::Success;
+}
+
+ResultStatus AppLoader_NRO::ReadProgramId(u64& out_program_id) {
+    if (nacp == nullptr) {
+        return ResultStatus::ErrorNoControl;
+    }
+
+    out_program_id = nacp->GetTitleId();
+    return ResultStatus::Success;
+}
+
+ResultStatus AppLoader_NRO::ReadRomFS(FileSys::VirtualFile& dir) {
+    if (romfs == nullptr) {
+        return ResultStatus::ErrorNoRomFS;
+    }
+
+    dir = romfs;
+    return ResultStatus::Success;
+}
+
+ResultStatus AppLoader_NRO::ReadTitle(std::string& title) {
+    if (nacp == nullptr) {
+        return ResultStatus::ErrorNoControl;
+    }
+
+    title = nacp->GetApplicationName();
+    return ResultStatus::Success;
+}
+
+bool AppLoader_NRO::IsRomFSUpdatable() const {
+    return false;
 }
 
 } // namespace Loader

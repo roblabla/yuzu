@@ -5,21 +5,18 @@
 #include "common/logging/log.h"
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/service/apm/apm.h"
+#include "core/hle/service/apm/interface.h"
 
-namespace Service {
-namespace APM {
+namespace Service::APM {
+
+Module::Module() = default;
+Module::~Module() = default;
 
 void InstallInterfaces(SM::ServiceManager& service_manager) {
-    std::make_shared<APM>()->InstallAsService(service_manager);
+    auto module_ = std::make_shared<Module>();
+    std::make_shared<APM>(module_, "apm")->InstallAsService(service_manager);
+    std::make_shared<APM>(module_, "apm:p")->InstallAsService(service_manager);
+    std::make_shared<APM_Sys>()->InstallAsService(service_manager);
 }
 
-APM::APM() : ServiceFramework("apm") {
-    static const FunctionInfo functions[] = {
-        {0x00000000, nullptr, "OpenSession"},
-        {0x00000001, nullptr, "GetPerformanceMode"},
-    };
-    RegisterHandlers(functions);
-}
-
-} // namespace APM
-} // namespace Service
+} // namespace Service::APM

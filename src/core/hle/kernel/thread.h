@@ -4,46 +4,57 @@
 
 #pragma once
 
+#include <functional>
+#include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
-#include <boost/container/flat_map.hpp>
-#include <boost/container/flat_set.hpp>
+
 #include "common/common_types.h"
 #include "core/arm/arm_interface.h"
-#include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/object.h"
 #include "core/hle/kernel/wait_object.h"
 #include "core/hle/result.h"
+
+namespace Kernel {
+
+class KernelCore;
+class Process;
+class Scheduler;
 
 enum ThreadPriority : u32 {
     THREADPRIO_HIGHEST = 0,       ///< Highest thread priority
     THREADPRIO_USERLAND_MAX = 24, ///< Highest thread priority for userland apps
-    THREADPRIO_DEFAULT = 48,      ///< Default thread priority for userland apps
+    THREADPRIO_DEFAULT = 44,      ///< Default thread priority for userland apps
     THREADPRIO_LOWEST = 63,       ///< Lowest thread priority
+    THREADPRIO_COUNT = 64,        ///< Total number of possible thread priorities.
 };
 
 enum ThreadProcessorId : s32 {
-    THREADPROCESSORID_DEFAULT = -2, ///< Run thread on default core specified by exheader
-    THREADPROCESSORID_0 = 0,        ///< Run thread on core 0
-    THREADPROCESSORID_1 = 1,        ///< Run thread on core 1
-    THREADPROCESSORID_2 = 2,        ///< Run thread on core 2
-    THREADPROCESSORID_3 = 3,        ///< Run thread on core 3
-    THREADPROCESSORID_MAX = 4,      ///< Processor ID must be less than this
+    THREADPROCESSORID_IDEAL = -2, ///< Run thread on the ideal core specified by the process.
+    THREADPROCESSORID_0 = 0,      ///< Run thread on core 0
+    THREADPROCESSORID_1 = 1,      ///< Run thread on core 1
+    THREADPROCESSORID_2 = 2,      ///< Run thread on core 2
+    THREADPROCESSORID_3 = 3,      ///< Run thread on core 3
+    THREADPROCESSORID_MAX = 4,    ///< Processor ID must be less than this
 
     /// Allowed CPU mask
     THREADPROCESSORID_DEFAULT_MASK = (1 << THREADPROCESSORID_0) | (1 << THREADPROCESSORID_1) |
                                      (1 << THREADPROCESSORID_2) | (1 << THREADPROCESSORID_3)
 };
 
-enum ThreadStatus {
-    THREADSTATUS_RUNNING,        ///< Currently running
-    THREADSTATUS_READY,          ///< Ready to run
-    THREADSTATUS_WAIT_ARB,       ///< Waiting on an address arbiter
-    THREADSTATUS_WAIT_SLEEP,     ///< Waiting due to a SleepThread SVC
-    THREADSTATUS_WAIT_SYNCH_ANY, ///< Waiting due to WaitSynch1 or WaitSynchN with wait_all = false
-    THREADSTATUS_WAIT_SYNCH_ALL, ///< Waiting due to WaitSynchronizationN with wait_all = true
-    THREADSTATUS_DORMANT,        ///< Created but not yet made ready
-    THREADSTATUS_DEAD            ///< Run to completion, or forcefully terminated
+enum class ThreadStatus {
+    Running,      ///< Currently running
+    Ready,        ///< Ready to run
+    Paused,       ///< Paused by SetThreadActivity or debug
+    WaitHLEEvent, ///< Waiting for hle event to finish
+    WaitSleep,    ///< Waiting due to a SleepThread SVC
+    WaitIPC,      ///< Waiting for the reply from an IPC request
+    WaitSynchAny, ///< Waiting due to WaitSynch1 or WaitSynchN with wait_all = false
+    WaitSynchAll, ///< Waiting due to WaitSynchronizationN with wait_all = true
+    WaitMutex,    ///< Waiting due to an ArbitrateLock/WaitProcessWideKey svc
+    WaitArb,      ///< Waiting due to a SignalToAddress/WaitForAddress svc
+    Dormant,      ///< Created but not yet made ready
+    Dead          ///< Run to completion, or forcefully terminated
 };
 
 enum class ThreadWakeupReason {
@@ -51,15 +62,28 @@ enum class ThreadWakeupReason {
     Timeout // The thread was woken up due to a wait timeout.
 };
 
-namespace Kernel {
-
-class Mutex;
-class Process;
+enum class ThreadActivity : u32 {
+    Normal = 0,
+    Paused = 1,
+};
 
 class Thread final : public WaitObject {
 public:
+    using TLSMemory = std::vector<u8>;
+    using TLSMemoryPtr = std::shared_ptr<TLSMemory>;
+
+    using MutexWaitingThreads = std::vector<SharedPtr<Thread>>;
+
+    using ThreadContext = Core::ARM_Interface::ThreadContext;
+
+    using ThreadWaitObjects = std::vector<SharedPtr<WaitObject>>;
+
+    using WakeupCallback = std::function<bool(ThreadWakeupReason reason, SharedPtr<Thread> thread,
+                                              SharedPtr<WaitObject> object, std::size_t index)>;
+
     /**
      * Creates and returns a new thread. The new thread is immediately scheduled
+     * @param kernel The kernel instance this thread will be created under.
      * @param name The friendly name desired for the thread
      * @param entry_point The address at which the thread should start execution
      * @param priority The thread's priority
@@ -69,9 +93,10 @@ public:
      * @param owner_process The parent process for the thread
      * @return A shared pointer to the newly created thread
      */
-    static ResultVal<SharedPtr<Thread>> Create(std::string name, VAddr entry_point, u32 priority,
-                                               u64 arg, s32 processor_id, VAddr stack_top,
-                                               SharedPtr<Process> owner_process);
+    static ResultVal<SharedPtr<Thread>> Create(KernelCore& kernel, std::string name,
+                                               VAddr entry_point, u32 priority, u64 arg,
+                                               s32 processor_id, VAddr stack_top,
+                                               Process& owner_process);
 
     std::string GetName() const override {
         return name;
@@ -97,16 +122,18 @@ public:
     }
 
     /**
+     * Gets the thread's nominal priority.
+     * @return The current thread's nominal priority.
+     */
+    u32 GetNominalPriority() const {
+        return nominal_priority;
+    }
+
+    /**
      * Sets the thread's current priority
      * @param priority The new priority
      */
     void SetPriority(u32 priority);
-
-    /**
-     * Boost's a thread's priority to the best priority among the thread's held mutexes.
-     * This prevents priority inversion via priority inheritance.
-     */
-    void UpdatePriority();
 
     /**
      * Temporarily boosts the thread's priority until the next time it is scheduled
@@ -114,12 +141,32 @@ public:
      */
     void BoostPriority(u32 priority);
 
+    /// Adds a thread to the list of threads that are waiting for a lock held by this thread.
+    void AddMutexWaiter(SharedPtr<Thread> thread);
+
+    /// Removes a thread from the list of threads that are waiting for a lock held by this thread.
+    void RemoveMutexWaiter(SharedPtr<Thread> thread);
+
+    /// Recalculates the current priority taking into account priority inheritance.
+    void UpdatePriority();
+
+    /// Changes the core that the thread is running or scheduled to run on.
+    void ChangeCore(u32 core, u64 mask);
+
     /**
      * Gets the thread's thread ID
      * @return The thread's ID
      */
-    u32 GetThreadId() const {
+    u64 GetThreadID() const {
         return thread_id;
+    }
+
+    TLSMemoryPtr& GetTLSMemory() {
+        return tls_memory;
+    }
+
+    const TLSMemoryPtr& GetTLSMemory() const {
+        return tls_memory;
     }
 
     /**
@@ -173,6 +220,19 @@ public:
     }
 
     /*
+     * Returns the value of the TPIDR_EL0 Read/Write system register for this thread.
+     * @returns The value of the TPIDR_EL0 register.
+     */
+    u64 GetTPIDR_EL0() const {
+        return tpidr_el0;
+    }
+
+    /// Sets the value of the TPIDR_EL0 Read/Write system register for this thread.
+    void SetTPIDR_EL0(u64 value) {
+        tpidr_el0 = value;
+    }
+
+    /*
      * Returns the address of the current thread's command buffer, located in the TLS.
      * @returns VAddr of the thread's command buffer.
      */
@@ -184,91 +244,216 @@ public:
      * with wait_all = true.
      */
     bool IsSleepingOnWaitAll() const {
-        return status == THREADSTATUS_WAIT_SYNCH_ALL;
+        return status == ThreadStatus::WaitSynchAll;
     }
 
-    ARM_Interface::ThreadContext context;
+    ThreadContext& GetContext() {
+        return context;
+    }
 
-    u32 thread_id;
+    const ThreadContext& GetContext() const {
+        return context;
+    }
 
-    u32 status;
-    VAddr entry_point;
-    VAddr stack_top;
+    ThreadStatus GetStatus() const {
+        return status;
+    }
 
-    u32 nominal_priority; ///< Nominal thread priority, as set by the emulated application
-    u32 current_priority; ///< Current thread priority, can be temporarily changed
+    void SetStatus(ThreadStatus new_status);
 
-    u64 last_running_ticks; ///< CPU tick when thread was last running
+    u64 GetLastRunningTicks() const {
+        return last_running_ticks;
+    }
 
-    s32 processor_id;
+    u64 GetTotalCPUTimeTicks() const {
+        return total_cpu_time_ticks;
+    }
 
-    VAddr tls_address; ///< Virtual address of the Thread Local Storage of the thread
+    void UpdateCPUTimeTicks(u64 ticks) {
+        total_cpu_time_ticks += ticks;
+    }
 
-    /// Mutexes currently held by this thread, which will be released when it exits.
-    boost::container::flat_set<SharedPtr<Mutex>> held_mutexes;
+    s32 GetProcessorID() const {
+        return processor_id;
+    }
 
-    /// Mutexes that this thread is currently waiting for.
-    boost::container::flat_set<SharedPtr<Mutex>> pending_mutexes;
+    Process* GetOwnerProcess() {
+        return owner_process;
+    }
 
-    SharedPtr<Process> owner_process; ///< Process that owns this thread
+    const Process* GetOwnerProcess() const {
+        return owner_process;
+    }
+
+    const ThreadWaitObjects& GetWaitObjects() const {
+        return wait_objects;
+    }
+
+    void SetWaitObjects(ThreadWaitObjects objects) {
+        wait_objects = std::move(objects);
+    }
+
+    void ClearWaitObjects() {
+        wait_objects.clear();
+    }
+
+    /// Determines whether all the objects this thread is waiting on are ready.
+    bool AllWaitObjectsReady();
+
+    const MutexWaitingThreads& GetMutexWaitingThreads() const {
+        return wait_mutex_threads;
+    }
+
+    Thread* GetLockOwner() const {
+        return lock_owner.get();
+    }
+
+    void SetLockOwner(SharedPtr<Thread> owner) {
+        lock_owner = std::move(owner);
+    }
+
+    VAddr GetCondVarWaitAddress() const {
+        return condvar_wait_address;
+    }
+
+    void SetCondVarWaitAddress(VAddr address) {
+        condvar_wait_address = address;
+    }
+
+    VAddr GetMutexWaitAddress() const {
+        return mutex_wait_address;
+    }
+
+    void SetMutexWaitAddress(VAddr address) {
+        mutex_wait_address = address;
+    }
+
+    Handle GetWaitHandle() const {
+        return wait_handle;
+    }
+
+    void SetWaitHandle(Handle handle) {
+        wait_handle = handle;
+    }
+
+    VAddr GetArbiterWaitAddress() const {
+        return arb_wait_address;
+    }
+
+    void SetArbiterWaitAddress(VAddr address) {
+        arb_wait_address = address;
+    }
+
+    void SetGuestHandle(Handle handle) {
+        guest_handle = handle;
+    }
+
+    bool HasWakeupCallback() const {
+        return wakeup_callback != nullptr;
+    }
+
+    void SetWakeupCallback(WakeupCallback callback) {
+        wakeup_callback = std::move(callback);
+    }
+
+    void InvalidateWakeupCallback() {
+        SetWakeupCallback(nullptr);
+    }
+
+    /**
+     * Invokes the thread's wakeup callback.
+     *
+     * @pre A valid wakeup callback has been set. Violating this precondition
+     *      will cause an assertion to trigger.
+     */
+    bool InvokeWakeupCallback(ThreadWakeupReason reason, SharedPtr<Thread> thread,
+                              SharedPtr<WaitObject> object, std::size_t index);
+
+    u32 GetIdealCore() const {
+        return ideal_core;
+    }
+
+    u64 GetAffinityMask() const {
+        return affinity_mask;
+    }
+
+    ThreadActivity GetActivity() const {
+        return activity;
+    }
+
+    void SetActivity(ThreadActivity value);
+
+private:
+    explicit Thread(KernelCore& kernel);
+    ~Thread() override;
+
+    void ChangeScheduler();
+
+    Core::ARM_Interface::ThreadContext context{};
+
+    u64 thread_id = 0;
+
+    ThreadStatus status = ThreadStatus::Dormant;
+
+    VAddr entry_point = 0;
+    VAddr stack_top = 0;
+
+    u32 nominal_priority = 0; ///< Nominal thread priority, as set by the emulated application
+    u32 current_priority = 0; ///< Current thread priority, can be temporarily changed
+
+    u64 total_cpu_time_ticks = 0; ///< Total CPU running ticks.
+    u64 last_running_ticks = 0;   ///< CPU tick when thread was last running
+
+    s32 processor_id = 0;
+
+    VAddr tls_address = 0; ///< Virtual address of the Thread Local Storage of the thread
+    u64 tpidr_el0 = 0;     ///< TPIDR_EL0 read/write system register.
+
+    /// Process that owns this thread
+    Process* owner_process;
 
     /// Objects that the thread is waiting on, in the same order as they were
-    // passed to WaitSynchronization1/N.
-    std::vector<SharedPtr<WaitObject>> wait_objects;
+    /// passed to WaitSynchronization1/N.
+    ThreadWaitObjects wait_objects;
 
-    VAddr wait_address; ///< If waiting on an AddressArbiter, this is the arbitration address
+    /// List of threads that are waiting for a mutex that is held by this thread.
+    MutexWaitingThreads wait_mutex_threads;
+
+    /// Thread that owns the lock that this thread is waiting for.
+    SharedPtr<Thread> lock_owner;
+
+    /// If waiting on a ConditionVariable, this is the ConditionVariable address
+    VAddr condvar_wait_address = 0;
+    /// If waiting on a Mutex, this is the mutex address
+    VAddr mutex_wait_address = 0;
+    /// The handle used to wait for the mutex.
+    Handle wait_handle = 0;
+
+    /// If waiting for an AddressArbiter, this is the address being waited on.
+    VAddr arb_wait_address{0};
+
+    /// Handle used by guest emulated application to access this thread
+    Handle guest_handle = 0;
+
+    /// Handle used as userdata to reference this object when inserting into the CoreTiming queue.
+    Handle callback_handle = 0;
+
+    /// Callback that will be invoked when the thread is resumed from a waiting state. If the thread
+    /// was waiting via WaitSynchronizationN then the object will be the last object that became
+    /// available. In case of a timeout, the object will be nullptr.
+    WakeupCallback wakeup_callback;
+
+    Scheduler* scheduler = nullptr;
+
+    u32 ideal_core{0xFFFFFFFF};
+    u64 affinity_mask{0x1};
+
+    TLSMemoryPtr tls_memory = std::make_shared<TLSMemory>();
 
     std::string name;
 
-    /// Handle used by guest emulated application to access this thread
-    Handle guest_handle;
-
-    /// Handle used as userdata to reference this object when inserting into the CoreTiming queue.
-    Handle callback_handle;
-
-    using WakeupCallback = bool(ThreadWakeupReason reason, SharedPtr<Thread> thread,
-                                SharedPtr<WaitObject> object, size_t index);
-    // Callback that will be invoked when the thread is resumed from a waiting state. If the thread
-    // was waiting via WaitSynchronizationN then the object will be the last object that became
-    // available. In case of a timeout, the object will be nullptr.
-    std::function<WakeupCallback> wakeup_callback;
-
-private:
-    Thread();
-    ~Thread() override;
+    ThreadActivity activity = ThreadActivity::Normal;
 };
-
-/**
- * Sets up the primary application thread
- * @param entry_point The address at which the thread should start execution
- * @param priority The priority to give the main thread
- * @param owner_process The parent process for the main thread
- * @return A shared pointer to the main thread
- */
-SharedPtr<Thread> SetupMainThread(VAddr entry_point, u32 priority,
-                                  SharedPtr<Process> owner_process);
-
-/**
- * Returns whether there are any threads that are ready to run.
- */
-bool HaveReadyThreads();
-
-/**
- * Reschedules to the next available thread (call after current thread is suspended)
- */
-void Reschedule();
-
-/**
- * Arbitrate the highest priority thread that is waiting
- * @param address The address for which waiting threads should be arbitrated
- */
-Thread* ArbitrateHighestPriorityThread(VAddr address);
-
-/**
- * Arbitrate all threads currently waiting.
- * @param address The address for which waiting threads should be arbitrated
- */
-void ArbitrateAllThreads(VAddr address);
 
 /**
  * Gets the current thread
@@ -281,29 +466,8 @@ Thread* GetCurrentThread();
 void WaitCurrentThread_Sleep();
 
 /**
- * Waits the current thread from an ArbitrateAddress call
- * @param wait_address Arbitration address used to resume from wait
- */
-void WaitCurrentThread_ArbitrateAddress(VAddr wait_address);
-
-/**
  * Stops the current thread and removes it from the thread_list
  */
 void ExitCurrentThread();
-
-/**
- * Initialize threading
- */
-void ThreadingInit();
-
-/**
- * Shutdown threading
- */
-void ThreadingShutdown();
-
-/**
- * Get a const reference to the thread list for debug use
- */
-const std::vector<SharedPtr<Thread>>& GetThreadList();
 
 } // namespace Kernel

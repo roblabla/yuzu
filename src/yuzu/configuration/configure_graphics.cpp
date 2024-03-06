@@ -2,33 +2,19 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <QColorDialog>
 #include "core/core.h"
 #include "core/settings.h"
 #include "ui_configure_graphics.h"
 #include "yuzu/configuration/configure_graphics.h"
 
-
-ConfigureGraphics::ConfigureGraphics(QWidget* parent)
-    : QWidget(parent), ui(new Ui::ConfigureGraphics) {
-
-    ui->setupUi(this);
-    this->setConfiguration();
-}
-
-ConfigureGraphics::~ConfigureGraphics() {}
-
+namespace {
 enum class Resolution : int {
     Auto,
     Scale1x,
     Scale2x,
     Scale3x,
     Scale4x,
-    Scale5x,
-    Scale6x,
-    Scale7x,
-    Scale8x,
-    Scale9x,
-    Scale10x,
 };
 
 float ToResolutionFactor(Resolution option) {
@@ -43,18 +29,6 @@ float ToResolutionFactor(Resolution option) {
         return 3.f;
     case Resolution::Scale4x:
         return 4.f;
-    case Resolution::Scale5x:
-        return 5.f;
-    case Resolution::Scale6x:
-        return 6.f;
-    case Resolution::Scale7x:
-        return 7.f;
-    case Resolution::Scale8x:
-        return 8.f;
-    case Resolution::Scale9x:
-        return 9.f;
-    case Resolution::Scale10x:
-        return 10.f;
     }
     return 0.f;
 }
@@ -70,31 +44,51 @@ Resolution FromResolutionFactor(float factor) {
         return Resolution::Scale3x;
     } else if (factor == 4.f) {
         return Resolution::Scale4x;
-    } else if (factor == 5.f) {
-        return Resolution::Scale5x;
-    } else if (factor == 6.f) {
-        return Resolution::Scale6x;
-    } else if (factor == 7.f) {
-        return Resolution::Scale7x;
-    } else if (factor == 8.f) {
-        return Resolution::Scale8x;
-    } else if (factor == 9.f) {
-        return Resolution::Scale9x;
-    } else if (factor == 10.f) {
-        return Resolution::Scale10x;
     }
     return Resolution::Auto;
 }
+} // Anonymous namespace
+
+ConfigureGraphics::ConfigureGraphics(QWidget* parent)
+    : QWidget(parent), ui(new Ui::ConfigureGraphics) {
+
+    ui->setupUi(this);
+    this->setConfiguration();
+
+    ui->frame_limit->setEnabled(Settings::values.use_frame_limit);
+    connect(ui->toggle_frame_limit, &QCheckBox::stateChanged, ui->frame_limit,
+            &QSpinBox::setEnabled);
+    connect(ui->bg_button, &QPushButton::clicked, this, [this] {
+        const QColor new_bg_color = QColorDialog::getColor(bg_color);
+        if (!new_bg_color.isValid())
+            return;
+        bg_color = new_bg_color;
+        ui->bg_button->setStyleSheet(
+            QString("QPushButton { background-color: %1 }").arg(bg_color.name()));
+    });
+}
+
+ConfigureGraphics::~ConfigureGraphics() = default;
 
 void ConfigureGraphics::setConfiguration() {
     ui->resolution_factor_combobox->setCurrentIndex(
         static_cast<int>(FromResolutionFactor(Settings::values.resolution_factor)));
-    ui->toggle_framelimit->setChecked(Settings::values.toggle_framelimit);
+    ui->toggle_frame_limit->setChecked(Settings::values.use_frame_limit);
+    ui->frame_limit->setValue(Settings::values.frame_limit);
+    ui->use_accurate_gpu_emulation->setChecked(Settings::values.use_accurate_gpu_emulation);
+    bg_color = QColor::fromRgbF(Settings::values.bg_red, Settings::values.bg_green,
+                                Settings::values.bg_blue);
+    ui->bg_button->setStyleSheet(
+        QString("QPushButton { background-color: %1 }").arg(bg_color.name()));
 }
 
 void ConfigureGraphics::applyConfiguration() {
     Settings::values.resolution_factor =
         ToResolutionFactor(static_cast<Resolution>(ui->resolution_factor_combobox->currentIndex()));
-    Settings::values.toggle_framelimit = ui->toggle_framelimit->isChecked();
-    Settings::Apply();
+    Settings::values.use_frame_limit = ui->toggle_frame_limit->isChecked();
+    Settings::values.frame_limit = ui->frame_limit->value();
+    Settings::values.use_accurate_gpu_emulation = ui->use_accurate_gpu_emulation->isChecked();
+    Settings::values.bg_red = static_cast<float>(bg_color.redF());
+    Settings::values.bg_green = static_cast<float>(bg_color.greenF());
+    Settings::values.bg_blue = static_cast<float>(bg_color.blueF());
 }

@@ -4,149 +4,101 @@
 
 #pragma once
 
-#include <cstddef>
 #include <string>
-#include <utility>
-#include <boost/smart_ptr/intrusive_ptr.hpp>
-#include "common/assert.h"
-#include "common/common_types.h"
+#include <unordered_map>
+#include "core/hle/kernel/object.h"
+
+template <typename T>
+class ResultVal;
+
+namespace CoreTiming {
+struct EventType;
+}
 
 namespace Kernel {
 
-using Handle = u32;
+class ClientPort;
+class HandleTable;
+class Process;
+class ResourceLimit;
+class Thread;
 
-enum class HandleType : u32 {
-    Unknown,
-    Event,
-    Mutex,
-    SharedMemory,
-    Thread,
-    Process,
-    AddressArbiter,
-    ConditionVariable,
-    Timer,
-    ResourceLimit,
-    CodeSet,
-    ClientPort,
-    ServerPort,
-    ClientSession,
-    ServerSession,
-    Domain,
-};
-
-enum {
-    DEFAULT_STACK_SIZE = 0x4000,
-};
-
-enum class ResetType {
-    OneShot,
-    Sticky,
-    Pulse,
-};
-
-class Object : NonCopyable {
-public:
-    virtual ~Object() {}
-
-    /// Returns a unique identifier for the object. For debugging purposes only.
-    unsigned int GetObjectId() const {
-        return object_id;
-    }
-
-    virtual std::string GetTypeName() const {
-        return "[BAD KERNEL OBJECT TYPE]";
-    }
-    virtual std::string GetName() const {
-        return "[UNKNOWN KERNEL OBJECT]";
-    }
-    virtual Kernel::HandleType GetHandleType() const = 0;
-
-    /**
-     * Check if a thread can wait on the object
-     * @return True if a thread can wait on the object, otherwise false
-     */
-    bool IsWaitable() const {
-        switch (GetHandleType()) {
-        case HandleType::Event:
-        case HandleType::Mutex:
-        case HandleType::Thread:
-        case HandleType::ConditionVariable:
-        case HandleType::Timer:
-        case HandleType::ServerPort:
-        case HandleType::ServerSession:
-            return true;
-
-        case HandleType::Unknown:
-        case HandleType::SharedMemory:
-        case HandleType::Process:
-        case HandleType::AddressArbiter:
-        case HandleType::ResourceLimit:
-        case HandleType::CodeSet:
-        case HandleType::ClientPort:
-        case HandleType::ClientSession:
-        case HandleType::Domain:
-            return false;
-        }
-
-        UNREACHABLE();
-    }
-
-    /**
-     * Check if svcSendSyncRequest can be called on the object
-     * @return True svcSendSyncRequest can be called on the object, otherwise false
-     */
-    bool IsSyncable() const {
-        switch (GetHandleType()) {
-        case HandleType::ClientSession:
-        case HandleType::Domain:
-            return true;
-        }
-
-        UNREACHABLE();
-    }
-
+/// Represents a single instance of the kernel.
+class KernelCore {
+private:
+    using NamedPortTable = std::unordered_map<std::string, SharedPtr<ClientPort>>;
 
 public:
-    static unsigned int next_object_id;
+    KernelCore();
+    ~KernelCore();
+
+    KernelCore(const KernelCore&) = delete;
+    KernelCore& operator=(const KernelCore&) = delete;
+
+    KernelCore(KernelCore&&) = delete;
+    KernelCore& operator=(KernelCore&&) = delete;
+
+    /// Resets the kernel to a clean slate for use.
+    void Initialize();
+
+    /// Clears all resources in use by the kernel instance.
+    void Shutdown();
+
+    /// Retrieves a shared pointer to the system resource limit instance.
+    SharedPtr<ResourceLimit> GetSystemResourceLimit() const;
+
+    /// Retrieves a shared pointer to a Thread instance within the thread wakeup handle table.
+    SharedPtr<Thread> RetrieveThreadFromWakeupCallbackHandleTable(Handle handle) const;
+
+    /// Adds the given shared pointer to an internal list of active processes.
+    void AppendNewProcess(SharedPtr<Process> process);
+
+    /// Makes the given process the new current process.
+    void MakeCurrentProcess(Process* process);
+
+    /// Retrieves a pointer to the current process.
+    Process* CurrentProcess();
+
+    /// Retrieves a const pointer to the current process.
+    const Process* CurrentProcess() const;
+
+    /// Adds a port to the named port table
+    void AddNamedPort(std::string name, SharedPtr<ClientPort> port);
+
+    /// Finds a port within the named port table with the given name.
+    NamedPortTable::iterator FindNamedPort(const std::string& name);
+
+    /// Finds a port within the named port table with the given name.
+    NamedPortTable::const_iterator FindNamedPort(const std::string& name) const;
+
+    /// Determines whether or not the given port is a valid named port.
+    bool IsValidNamedPort(NamedPortTable::const_iterator port) const;
 
 private:
-    friend void intrusive_ptr_add_ref(Object*);
-    friend void intrusive_ptr_release(Object*);
+    friend class Object;
+    friend class Process;
+    friend class Thread;
 
-    unsigned int ref_count = 0;
-    unsigned int object_id = next_object_id++;
+    /// Creates a new object ID, incrementing the internal object ID counter.
+    u32 CreateNewObjectID();
+
+    /// Creates a new process ID, incrementing the internal process ID counter;
+    u64 CreateNewProcessID();
+
+    /// Creates a new thread ID, incrementing the internal thread ID counter.
+    u64 CreateNewThreadID();
+
+    /// Retrieves the event type used for thread wakeup callbacks.
+    CoreTiming::EventType* ThreadWakeupCallbackEventType() const;
+
+    /// Provides a reference to the thread wakeup callback handle table.
+    Kernel::HandleTable& ThreadWakeupCallbackHandleTable();
+
+    /// Provides a const reference to the thread wakeup callback handle table.
+    const Kernel::HandleTable& ThreadWakeupCallbackHandleTable() const;
+
+    struct Impl;
+    std::unique_ptr<Impl> impl;
 };
-
-// Special functions used by boost::instrusive_ptr to do automatic ref-counting
-inline void intrusive_ptr_add_ref(Object* object) {
-    ++object->ref_count;
-}
-
-inline void intrusive_ptr_release(Object* object) {
-    if (--object->ref_count == 0) {
-        delete object;
-    }
-}
-
-template <typename T>
-using SharedPtr = boost::intrusive_ptr<T>;
-
-/**
- * Attempts to downcast the given Object pointer to a pointer to T.
- * @return Derived pointer to the object, or `nullptr` if `object` isn't of type T.
- */
-template <typename T>
-inline SharedPtr<T> DynamicObjectCast(SharedPtr<Object> object) {
-    if (object != nullptr && object->GetHandleType() == T::HANDLE_TYPE) {
-        return boost::static_pointer_cast<T>(std::move(object));
-    }
-    return nullptr;
-}
-
-/// Initialize the kernel with the specified system mode.
-void Init(u32 system_mode);
-
-/// Shutdown the kernel
-void Shutdown();
 
 } // namespace Kernel

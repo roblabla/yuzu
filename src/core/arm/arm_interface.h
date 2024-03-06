@@ -6,9 +6,14 @@
 
 #include <array>
 #include "common/common_types.h"
-#include "core/hle/kernel/vm_manager.h"
 
-/// Generic ARM11 CPU interface
+namespace Kernel {
+enum class VMAPermission : u8;
+}
+
+namespace Core {
+
+/// Generic ARMv8 CPU interface
 class ARM_Interface : NonCopyable {
 public:
     virtual ~ARM_Interface() {}
@@ -17,29 +22,29 @@ public:
         std::array<u64, 31> cpu_registers;
         u64 sp;
         u64 pc;
-        u64 cpsr;
-        std::array<u128, 32> fpu_registers;
-        u64 fpscr;
-
-        // TODO(bunnei): Fix once we have proper support for tpidrro_el0, etc. in the JIT
-        VAddr tls_address;
+        u32 pstate;
+        std::array<u8, 4> padding;
+        std::array<u128, 32> vector_registers;
+        u32 fpcr;
+        u32 fpsr;
+        u64 tpidr;
     };
+    // Internally within the kernel, it expects the AArch64 version of the
+    // thread context to be 800 bytes in size.
+    static_assert(sizeof(ThreadContext) == 0x320);
 
-    /**
-     * Runs the CPU for the given number of instructions
-     * @param num_instructions Number of instructions to run
-     */
-    void Run(int num_instructions) {
-        ExecuteInstructions(num_instructions);
-        this->num_instructions += num_instructions;
-    }
+    /// Runs the CPU until an event happens
+    virtual void Run() = 0;
 
     /// Step CPU by one instruction
-    void Step() {
-        Run(1);
-    }
+    virtual void Step() = 0;
 
-    virtual void MapBackingMemory(VAddr address, size_t size, u8* memory, Kernel::VMAPermission perms) {}
+    /// Maps a backing memory region for the CPU
+    virtual void MapBackingMemory(VAddr address, std::size_t size, u8* memory,
+                                  Kernel::VMAPermission perms) = 0;
+
+    /// Unmaps a region of memory that was previously mapped using MapBackingMemory
+    virtual void UnmapMemory(VAddr address, std::size_t size) = 0;
 
     /// Clear all instruction cache
     virtual void ClearInstructionCache() = 0;
@@ -73,39 +78,51 @@ public:
      */
     virtual void SetReg(int index, u64 value) = 0;
 
-    virtual u128 GetExtReg(int index) const = 0;
-
-    virtual void SetExtReg(int index, u128 value) = 0;
+    /**
+     * Gets the value of a specified vector register.
+     *
+     * @param index The index of the vector register.
+     * @return the value within the vector register.
+     */
+    virtual u128 GetVectorReg(int index) const = 0;
 
     /**
-     * Gets the value of a VFP register
-     * @param index Register index (0-31)
-     * @return Returns the value in the register
+     * Sets a given value into a vector register.
+     *
+     * @param index The index of the vector register.
+     * @param value The new value to place in the register.
      */
-    virtual u32 GetVFPReg(int index) const = 0;
+    virtual void SetVectorReg(int index, u128 value) = 0;
 
     /**
-     * Sets a VFP register to the given value
-     * @param index Register index (0-31)
-     * @param value Value to set register to
+     * Get the current PSTATE register
+     * @return Returns the value of the PSTATE register
      */
-    virtual void SetVFPReg(int index, u32 value) = 0;
+    virtual u32 GetPSTATE() const = 0;
 
     /**
-     * Get the current CPSR register
-     * @return Returns the value of the CPSR register
+     * Set the current PSTATE register
+     * @param pstate Value to set PSTATE to
      */
-    virtual u32 GetCPSR() const = 0;
-
-    /**
-     * Set the current CPSR register
-     * @param cpsr Value to set CPSR to
-     */
-    virtual void SetCPSR(u32 cpsr) = 0;
+    virtual void SetPSTATE(u32 pstate) = 0;
 
     virtual VAddr GetTlsAddress() const = 0;
 
     virtual void SetTlsAddress(VAddr address) = 0;
+
+    /**
+     * Gets the value within the TPIDR_EL0 (read/write software thread ID) register.
+     *
+     * @return the value within the register.
+     */
+    virtual u64 GetTPIDR_EL0() const = 0;
+
+    /**
+     * Sets a new value within the TPIDR_EL0 (read/write software thread ID) register.
+     *
+     * @param value The new value to place in the register.
+     */
+    virtual void SetTPIDR_EL0(u64 value) = 0;
 
     /**
      * Saves the current CPU context
@@ -119,21 +136,19 @@ public:
      */
     virtual void LoadContext(const ThreadContext& ctx) = 0;
 
+    /// Clears the exclusive monitor's state.
+    virtual void ClearExclusiveState() = 0;
+
     /// Prepare core for thread reschedule (if needed to correctly handle state)
     virtual void PrepareReschedule() = 0;
 
-    /// Getter for num_instructions
-    u64 GetNumInstructions() const {
-        return num_instructions;
-    }
-
-protected:
-    /**
-     * Executes the given number of instructions
-     * @param num_instructions Number of instructions to executes
-     */
-    virtual void ExecuteInstructions(int num_instructions) = 0;
-
-private:
-    u64 num_instructions = 0; ///< Number of instructions executed
+    /// fp (= r29) points to the last frame record.
+    /// Note that this is the frame record for the *previous* frame, not the current one.
+    /// Note we need to subtract 4 from our last read to get the proper address
+    /// Frame records are two words long:
+    /// fp+0 : pointer to previous frame record
+    /// fp+8 : value of lr for frame
+    void LogBacktrace() const;
 };
+
+} // namespace Core

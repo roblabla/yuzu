@@ -6,19 +6,19 @@
 #include "common/assert.h"
 #include "core/hle/kernel/client_port.h"
 #include "core/hle/kernel/errors.h"
-#include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/object.h"
 #include "core/hle/kernel/server_port.h"
 #include "core/hle/kernel/server_session.h"
 #include "core/hle/kernel/thread.h"
 
 namespace Kernel {
 
-ServerPort::ServerPort() {}
-ServerPort::~ServerPort() {}
+ServerPort::ServerPort(KernelCore& kernel) : WaitObject{kernel} {}
+ServerPort::~ServerPort() = default;
 
 ResultVal<SharedPtr<ServerSession>> ServerPort::Accept() {
     if (pending_sessions.empty()) {
-        return ERR_NO_PENDING_SESSIONS;
+        return ERR_NOT_FOUND;
     }
 
     auto session = std::move(pending_sessions.back());
@@ -28,7 +28,7 @@ ResultVal<SharedPtr<ServerSession>> ServerPort::Accept() {
 
 bool ServerPort::ShouldWait(Thread* thread) const {
     // If there are no pending sessions, we wait until a new one is added.
-    return pending_sessions.size() == 0;
+    return pending_sessions.empty();
 }
 
 void ServerPort::Acquire(Thread* thread) {
@@ -36,10 +36,10 @@ void ServerPort::Acquire(Thread* thread) {
 }
 
 std::tuple<SharedPtr<ServerPort>, SharedPtr<ClientPort>> ServerPort::CreatePortPair(
-    u32 max_sessions, std::string name) {
+    KernelCore& kernel, u32 max_sessions, std::string name) {
 
-    SharedPtr<ServerPort> server_port(new ServerPort);
-    SharedPtr<ClientPort> client_port(new ClientPort);
+    SharedPtr<ServerPort> server_port(new ServerPort(kernel));
+    SharedPtr<ClientPort> client_port(new ClientPort(kernel));
 
     server_port->name = name + "_Server";
     client_port->name = name + "_Client";
@@ -50,4 +50,4 @@ std::tuple<SharedPtr<ServerPort>, SharedPtr<ClientPort>> ServerPort::CreatePortP
     return std::make_tuple(std::move(server_port), std::move(client_port));
 }
 
-} // namespace
+} // namespace Kernel

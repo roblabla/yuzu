@@ -10,9 +10,9 @@
 
 struct SDL_Window;
 
-class EmuWindow_SDL2 : public EmuWindow {
+class EmuWindow_SDL2 : public Core::Frontend::EmuWindow {
 public:
-    EmuWindow_SDL2();
+    explicit EmuWindow_SDL2(bool fullscreen);
     ~EmuWindow_SDL2();
 
     /// Swap buffers to display the next frame
@@ -40,8 +40,26 @@ private:
     /// Called by PollEvents when a mouse button is pressed or released
     void OnMouseButton(u32 button, u8 state, s32 x, s32 y);
 
+    /// Translates pixel position (0..1) to pixel positions
+    std::pair<unsigned, unsigned> TouchToPixelPos(float touch_x, float touch_y) const;
+
+    /// Called by PollEvents when a finger starts touching the touchscreen
+    void OnFingerDown(float x, float y);
+
+    /// Called by PollEvents when a finger moves while touching the touchscreen
+    void OnFingerMotion(float x, float y);
+
+    /// Called by PollEvents when a finger stops touching the touchscreen
+    void OnFingerUp();
+
     /// Called by PollEvents when any event that may cause the window to be resized occurs
     void OnResize();
+
+    /// Called when user passes the fullscreen parameter flag
+    void Fullscreen();
+
+    /// Whether the GPU and driver supports the OpenGL extension required
+    bool SupportsRequiredGLExtensions();
 
     /// Called when a configuration change affects the minimal size of the window
     void OnMinimalClientAreaChangeRequest(

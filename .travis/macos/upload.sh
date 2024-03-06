@@ -8,8 +8,8 @@ COMPRESSION_FLAGS="-czvf"
 
 mkdir "$REV_NAME"
 
-cp build/src/yuzu_cmd/yuzu-cmd "$REV_NAME"
-cp -r build/src/yuzu/yuzu.app "$REV_NAME"
+cp build/bin/yuzu-cmd "$REV_NAME"
+cp -r build/bin/yuzu.app "$REV_NAME"
 
 # move qt libs into app bundle for deployment
 $(brew --prefix)/opt/qt5/bin/macdeployqt "${REV_NAME}/yuzu.app"

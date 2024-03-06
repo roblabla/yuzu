@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
 #include <unicorn/arm64.h>
 #include "common/assert.h"
 #include "common/microprofile.h"
@@ -9,9 +10,12 @@
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/hle/kernel/svc.h"
+#include "core/memory.h"
+
+namespace Core {
 
 // Load Unicorn DLL once on Windows using RAII
-#ifdef _WIN32
+#ifdef _MSC_VER
 #include <unicorn_dynload.h>
 struct LoadDll {
 private:
@@ -29,10 +33,21 @@ LoadDll LoadDll::g_load_dll;
 #define CHECKED(expr)                                                                              \
     do {                                                                                           \
         if (auto _cerr = (expr)) {                                                                 \
-            ASSERT_MSG(false, "Call " #expr " failed with error: %u (%s)\n", _cerr,                \
+            ASSERT_MSG(false, "Call " #expr " failed with error: {} ({})\n", _cerr,                \
                        uc_strerror(_cerr));                                                        \
         }                                                                                          \
     } while (0)
+
+static void CodeHook(uc_engine* uc, uint64_t address, uint32_t size, void* user_data) {
+    GDBStub::BreakpointAddress bkpt =
+        GDBStub::GetNextBreakpointFromAddress(address, GDBStub::BreakpointType::Execute);
+    if (GDBStub::IsMemoryBreak() ||
+        (bkpt.type != GDBStub::BreakpointType::None && address == bkpt.address)) {
+        auto core = static_cast<ARM_Unicorn*>(user_data);
+        core->RecordBreak(bkpt);
+        uc_emu_stop(uc);
+    }
+}
 
 static void InterruptHook(uc_engine* uc, u32 intNo, void* user_data) {
     u32 esr{};
@@ -51,8 +66,9 @@ static void InterruptHook(uc_engine* uc, u32 intNo, void* user_data) {
 static bool UnmappedMemoryHook(uc_engine* uc, uc_mem_type type, u64 addr, int size, u64 value,
                                void* user_data) {
     ARM_Interface::ThreadContext ctx{};
-    Core::CPU().SaveContext(ctx);
-    ASSERT_MSG(false, "Attempted to read from unmapped memory: 0x%llx", addr);
+    Core::CurrentArmInterface().SaveContext(ctx);
+    ASSERT_MSG(false, "Attempted to read from unmapped memory: 0x{:X}, pc=0x{:X}, lr=0x{:X}", addr,
+               ctx.pc, ctx.cpu_registers[30]);
     return {};
 }
 
@@ -65,15 +81,23 @@ ARM_Unicorn::ARM_Unicorn() {
     uc_hook hook{};
     CHECKED(uc_hook_add(uc, &hook, UC_HOOK_INTR, (void*)InterruptHook, this, 0, -1));
     CHECKED(uc_hook_add(uc, &hook, UC_HOOK_MEM_INVALID, (void*)UnmappedMemoryHook, this, 0, -1));
+    if (GDBStub::IsServerEnabled()) {
+        CHECKED(uc_hook_add(uc, &hook, UC_HOOK_CODE, (void*)CodeHook, this, 0, -1));
+        last_bkpt_hit = false;
+    }
 }
 
 ARM_Unicorn::~ARM_Unicorn() {
     CHECKED(uc_close(uc));
 }
 
-void ARM_Unicorn::MapBackingMemory(VAddr address, size_t size, u8* memory,
+void ARM_Unicorn::MapBackingMemory(VAddr address, std::size_t size, u8* memory,
                                    Kernel::VMAPermission perms) {
     CHECKED(uc_mem_map_ptr(uc, address, size, static_cast<u32>(perms), memory));
+}
+
+void ARM_Unicorn::UnmapMemory(VAddr address, std::size_t size) {
+    CHECKED(uc_mem_unmap(uc, address, size));
 }
 
 void ARM_Unicorn::SetPC(u64 pc) {
@@ -108,33 +132,24 @@ void ARM_Unicorn::SetReg(int regn, u64 val) {
     CHECKED(uc_reg_write(uc, treg, &val));
 }
 
-u128 ARM_Unicorn::GetExtReg(int /*index*/) const {
+u128 ARM_Unicorn::GetVectorReg(int /*index*/) const {
     UNIMPLEMENTED();
     static constexpr u128 res{};
     return res;
 }
 
-void ARM_Unicorn::SetExtReg(int /*index*/, u128 /*value*/) {
+void ARM_Unicorn::SetVectorReg(int /*index*/, u128 /*value*/) {
     UNIMPLEMENTED();
 }
 
-u32 ARM_Unicorn::GetVFPReg(int /*index*/) const {
-    UNIMPLEMENTED();
-    return {};
-}
-
-void ARM_Unicorn::SetVFPReg(int /*index*/, u32 /*value*/) {
-    UNIMPLEMENTED();
-}
-
-u32 ARM_Unicorn::GetCPSR() const {
+u32 ARM_Unicorn::GetPSTATE() const {
     u64 nzcv{};
     CHECKED(uc_reg_read(uc, UC_ARM64_REG_NZCV, &nzcv));
     return static_cast<u32>(nzcv);
 }
 
-void ARM_Unicorn::SetCPSR(u32 cpsr) {
-    u64 nzcv = cpsr;
+void ARM_Unicorn::SetPSTATE(u32 pstate) {
+    u64 nzcv = pstate;
     CHECKED(uc_reg_write(uc, UC_ARM64_REG_NZCV, &nzcv));
 }
 
@@ -148,21 +163,55 @@ void ARM_Unicorn::SetTlsAddress(VAddr base) {
     CHECKED(uc_reg_write(uc, UC_ARM64_REG_TPIDRRO_EL0, &base));
 }
 
-MICROPROFILE_DEFINE(ARM_Jit, "ARM JIT", "ARM JIT", MP_RGB(255, 64, 64));
-
-void ARM_Unicorn::ExecuteInstructions(int num_instructions) {
-    MICROPROFILE_SCOPE(ARM_Jit);
-    CHECKED(uc_emu_start(uc, GetPC(), 1ULL << 63, 0, num_instructions));
-    CoreTiming::AddTicks(num_instructions);
+u64 ARM_Unicorn::GetTPIDR_EL0() const {
+    u64 value{};
+    CHECKED(uc_reg_read(uc, UC_ARM64_REG_TPIDR_EL0, &value));
+    return value;
 }
 
-void ARM_Unicorn::SaveContext(ARM_Interface::ThreadContext& ctx) {
+void ARM_Unicorn::SetTPIDR_EL0(u64 value) {
+    CHECKED(uc_reg_write(uc, UC_ARM64_REG_TPIDR_EL0, &value));
+}
+
+void ARM_Unicorn::Run() {
+    if (GDBStub::IsServerEnabled()) {
+        ExecuteInstructions(std::max(4000000, 0));
+    } else {
+        ExecuteInstructions(std::max(CoreTiming::GetDowncount(), 0));
+    }
+}
+
+void ARM_Unicorn::Step() {
+    ExecuteInstructions(1);
+}
+
+MICROPROFILE_DEFINE(ARM_Jit_Unicorn, "ARM JIT", "Unicorn", MP_RGB(255, 64, 64));
+
+void ARM_Unicorn::ExecuteInstructions(int num_instructions) {
+    MICROPROFILE_SCOPE(ARM_Jit_Unicorn);
+    CHECKED(uc_emu_start(uc, GetPC(), 1ULL << 63, 0, num_instructions));
+    CoreTiming::AddTicks(num_instructions);
+    if (GDBStub::IsServerEnabled()) {
+        if (last_bkpt_hit) {
+            uc_reg_write(uc, UC_ARM64_REG_PC, &last_bkpt.address);
+        }
+        Kernel::Thread* thread = Kernel::GetCurrentThread();
+        SaveContext(thread->GetContext());
+        if (last_bkpt_hit || GDBStub::GetCpuStepFlag()) {
+            last_bkpt_hit = false;
+            GDBStub::Break();
+            GDBStub::SendTrap(thread, 5);
+        }
+    }
+}
+
+void ARM_Unicorn::SaveContext(ThreadContext& ctx) {
     int uregs[32];
     void* tregs[32];
 
     CHECKED(uc_reg_read(uc, UC_ARM64_REG_SP, &ctx.sp));
     CHECKED(uc_reg_read(uc, UC_ARM64_REG_PC, &ctx.pc));
-    CHECKED(uc_reg_read(uc, UC_ARM64_REG_NZCV, &ctx.cpsr));
+    CHECKED(uc_reg_read(uc, UC_ARM64_REG_NZCV, &ctx.pstate));
 
     for (auto i = 0; i < 29; ++i) {
         uregs[i] = UC_ARM64_REG_X0 + i;
@@ -175,23 +224,21 @@ void ARM_Unicorn::SaveContext(ARM_Interface::ThreadContext& ctx) {
 
     CHECKED(uc_reg_read_batch(uc, uregs, tregs, 31));
 
-    ctx.tls_address = GetTlsAddress();
-
     for (int i = 0; i < 32; ++i) {
         uregs[i] = UC_ARM64_REG_Q0 + i;
-        tregs[i] = &ctx.fpu_registers[i];
+        tregs[i] = &ctx.vector_registers[i];
     }
 
     CHECKED(uc_reg_read_batch(uc, uregs, tregs, 32));
 }
 
-void ARM_Unicorn::LoadContext(const ARM_Interface::ThreadContext& ctx) {
+void ARM_Unicorn::LoadContext(const ThreadContext& ctx) {
     int uregs[32];
     void* tregs[32];
 
     CHECKED(uc_reg_write(uc, UC_ARM64_REG_SP, &ctx.sp));
     CHECKED(uc_reg_write(uc, UC_ARM64_REG_PC, &ctx.pc));
-    CHECKED(uc_reg_write(uc, UC_ARM64_REG_NZCV, &ctx.cpsr));
+    CHECKED(uc_reg_write(uc, UC_ARM64_REG_NZCV, &ctx.pstate));
 
     for (int i = 0; i < 29; ++i) {
         uregs[i] = UC_ARM64_REG_X0 + i;
@@ -204,11 +251,9 @@ void ARM_Unicorn::LoadContext(const ARM_Interface::ThreadContext& ctx) {
 
     CHECKED(uc_reg_write_batch(uc, uregs, tregs, 31));
 
-    SetTlsAddress(ctx.tls_address);
-
     for (auto i = 0; i < 32; ++i) {
         uregs[i] = UC_ARM64_REG_Q0 + i;
-        tregs[i] = (void*)&ctx.fpu_registers[i];
+        tregs[i] = (void*)&ctx.vector_registers[i];
     }
 
     CHECKED(uc_reg_write_batch(uc, uregs, tregs, 32));
@@ -218,4 +263,13 @@ void ARM_Unicorn::PrepareReschedule() {
     CHECKED(uc_emu_stop(uc));
 }
 
+void ARM_Unicorn::ClearExclusiveState() {}
+
 void ARM_Unicorn::ClearInstructionCache() {}
+
+void ARM_Unicorn::RecordBreak(GDBStub::BreakpointAddress bkpt) {
+    last_bkpt = bkpt;
+    last_bkpt_hit = true;
+}
+
+} // namespace Core

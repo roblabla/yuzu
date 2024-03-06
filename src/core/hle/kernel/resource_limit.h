@@ -4,44 +4,37 @@
 
 #pragma once
 
+#include <array>
 #include "common/common_types.h"
-#include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/object.h"
+
+union ResultCode;
 
 namespace Kernel {
 
-enum class ResourceLimitCategory : u8 {
-    APPLICATION = 0,
-    SYS_APPLET = 1,
-    LIB_APPLET = 2,
-    OTHER = 3
+class KernelCore;
+
+enum class ResourceType : u32 {
+    PhysicalMemory,
+    Threads,
+    Events,
+    TransferMemory,
+    Sessions,
+
+    // Used as a count, not an actual type.
+    ResourceTypeCount
 };
 
-enum ResourceTypes {
-    PRIORITY = 0,
-    COMMIT = 1,
-    THREAD = 2,
-    EVENT = 3,
-    MUTEX = 4,
-    SEMAPHORE = 5,
-    TIMER = 6,
-    SHARED_MEMORY = 7,
-    ADDRESS_ARBITER = 8,
-    CPU_TIME = 9,
-};
+constexpr bool IsValidResourceType(ResourceType type) {
+    return type < ResourceType::ResourceTypeCount;
+}
 
 class ResourceLimit final : public Object {
 public:
     /**
      * Creates a resource limit object.
      */
-    static SharedPtr<ResourceLimit> Create(std::string name = "Unknown");
-
-    /**
-     * Retrieves the resource limit associated with the specified resource limit category.
-     * @param category The resource limit category
-     * @returns The resource limit associated with the category
-     */
-    static SharedPtr<ResourceLimit> GetForCategory(ResourceLimitCategory category);
+    static SharedPtr<ResourceLimit> Create(KernelCore& kernel, std::string name = "Unknown");
 
     std::string GetTypeName() const override {
         return "ResourceLimit";
@@ -60,67 +53,51 @@ public:
      * @param resource Requested resource type
      * @returns The current value of the resource type
      */
-    s32 GetCurrentResourceValue(u32 resource) const;
+    s64 GetCurrentResourceValue(ResourceType resource) const;
 
     /**
      * Gets the max value for the specified resource.
      * @param resource Requested resource type
      * @returns The max value of the resource type
      */
-    u32 GetMaxResourceValue(u32 resource) const;
+    s64 GetMaxResourceValue(ResourceType resource) const;
 
-    /// Name of resource limit object.
-    std::string name;
+    /**
+     * Sets the limit value for a given resource type.
+     *
+     * @param resource The resource type to apply the limit to.
+     * @param value    The limit to apply to the given resource type.
+     *
+     * @return A result code indicating if setting the limit value
+     *         was successful or not.
+     *
+     * @note The supplied limit value *must* be greater than or equal to
+     *       the current resource value for the given resource type,
+     *       otherwise ERR_INVALID_STATE will be returned.
+     */
+    ResultCode SetLimitValue(ResourceType resource, s64 value);
 
-    /// Max thread priority that a process in this category can create
-    s32 max_priority = 0;
+private:
+    explicit ResourceLimit(KernelCore& kernel);
+    ~ResourceLimit() override;
 
-    /// Max memory that processes in this category can use
-    s32 max_commit = 0;
-
-    ///< Max number of objects that can be collectively created by the processes in this category
-    s32 max_threads = 0;
-    s32 max_events = 0;
-    s32 max_mutexes = 0;
-    s32 max_semaphores = 0;
-    s32 max_timers = 0;
-    s32 max_shared_mems = 0;
-    s32 max_address_arbiters = 0;
-
-    /// Max CPU time that the processes in this category can utilize
-    s32 max_cpu_time = 0;
-
-    // TODO(Subv): Increment these in their respective Kernel::T::Create functions, keeping in mind
-    // that APPLICATION resource limits should not be affected by the objects created by service
-    // modules.
+    // TODO(Subv): Increment resource limit current values in their respective Kernel::T::Create
+    // functions
+    //
     // Currently we have no way of distinguishing if a Create was called by the running application,
     // or by a service module. Approach this once we have separated the service modules into their
     // own processes
 
-    /// Current memory that the processes in this category are using
-    s32 current_commit = 0;
+    using ResourceArray =
+        std::array<s64, static_cast<std::size_t>(ResourceType::ResourceTypeCount)>;
 
-    ///< Current number of objects among all processes in this category
-    s32 current_threads = 0;
-    s32 current_events = 0;
-    s32 current_mutexes = 0;
-    s32 current_semaphores = 0;
-    s32 current_timers = 0;
-    s32 current_shared_mems = 0;
-    s32 current_address_arbiters = 0;
+    /// Maximum values a resource type may reach.
+    ResourceArray limits{};
+    /// Current resource limit values.
+    ResourceArray values{};
 
-    /// Current CPU time that the processes in this category are utilizing
-    s32 current_cpu_time = 0;
-
-private:
-    ResourceLimit();
-    ~ResourceLimit() override;
+    /// Name of resource limit object.
+    std::string name;
 };
 
-/// Initializes the resource limits
-void ResourceLimitsInit();
-
-// Destroys the resource limits
-void ResourceLimitsShutdown();
-
-} // namespace
+} // namespace Kernel

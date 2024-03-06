@@ -30,7 +30,8 @@ enum class ErrorModule : u32 {
     Common = 0,
     Kernel = 1,
     FS = 2,
-    NvidiaTransferMemory = 3,
+    OS = 3, // used for Memory, Thread, Mutex, Nvidia
+    HTCS = 4,
     NCM = 5,
     DD = 6,
     LR = 8,
@@ -40,41 +41,80 @@ enum class ErrorModule : u32 {
     PM = 15,
     NS = 16,
     HTC = 18,
+    NCMContent = 20,
     SM = 21,
     RO = 22,
     SDMMC = 24,
+    OVLN = 25,
     SPL = 26,
     ETHC = 100,
     I2C = 101,
+    GPIO = 102,
+    UART = 103,
     Settings = 105,
+    WLAN = 107,
+    XCD = 108,
     NIFM = 110,
-    Display = 114,
-    NTC = 116,
+    Hwopus = 111,
+    Bluetooth = 113,
+    VI = 114,
+    NFP = 115,
+    Time = 116,
     FGM = 117,
-    PCIE = 120,
+    OE = 118,
+    PCIe = 120,
     Friends = 121,
+    BCAT = 122,
     SSL = 123,
     Account = 124,
+    News = 125,
     Mii = 126,
+    NFC = 127,
     AM = 128,
     PlayReport = 129,
+    AHID = 130,
+    Qlaunch = 132,
     PCV = 133,
     OMM = 134,
+    BPC = 135,
+    PSM = 136,
     NIM = 137,
     PSC = 138,
+    TC = 139,
     USB = 140,
+    NSD = 141,
+    PCTL = 142,
     BTM = 143,
+    ETicket = 145,
+    NGC = 146,
     ERPT = 147,
     APM = 148,
+    Profiler = 150,
+    ErrorUpload = 151,
+    Audio = 153,
     NPNS = 154,
+    NPNSHTTPSTREAM = 155,
     ARP = 157,
-    BOOT = 158,
-    NFC = 161,
+    SWKBD = 158,
+    BOOT = 159,
+    NFCMifare = 161,
     UserlandAssert = 162,
+    Fatal = 163,
+    NIMShop = 164,
+    SPSM = 165,
+    BGTC = 167,
     UserlandCrash = 168,
-    HID = 203,
+    SREPO = 180,
+    Dauth = 181,
+    HID = 202,
+    LDN = 203,
+    Irsensor = 205,
     Capture = 206,
-    TC = 651,
+    Manu = 208,
+    ATK = 209,
+    GRC = 212,
+    Migration = 216,
+    MigrationLdcServ = 217,
     GeneralWebApplet = 800,
     WifiWebAuthApplet = 809,
     WhitelistedApplet = 810,
@@ -106,11 +146,11 @@ union ResultCode {
     }
 
     constexpr bool IsSuccess() const {
-        return is_error.ExtractValue(raw) == 0;
+        return raw == 0;
     }
 
     constexpr bool IsError() const {
-        return is_error.ExtractValue(raw) == 1;
+        return raw != 0;
     }
 };
 
@@ -185,7 +225,7 @@ public:
         }
     }
 
-    ResultVal(ResultVal&& o) : result_code(o.result_code) {
+    ResultVal(ResultVal&& o) noexcept : result_code(o.result_code) {
         if (!o.empty()) {
             new (&object) T(std::move(o.object));
         }
@@ -198,6 +238,9 @@ public:
     }
 
     ResultVal& operator=(const ResultVal& o) {
+        if (this == &o) {
+            return *this;
+        }
         if (!empty()) {
             if (!o.empty()) {
                 object = o.object;

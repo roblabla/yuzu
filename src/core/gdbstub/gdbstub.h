@@ -6,7 +6,9 @@
 
 #pragma once
 
+#include <string>
 #include "common/common_types.h"
+#include "core/hle/kernel/thread.h"
 
 namespace GDBStub {
 
@@ -20,7 +22,7 @@ enum class BreakpointType {
 };
 
 struct BreakpointAddress {
-    PAddr address;
+    VAddr address;
     BreakpointType type;
 };
 
@@ -50,6 +52,9 @@ bool IsServerEnabled();
 /// Returns true if there is an active socket connection.
 bool IsConnected();
 
+/// Register module.
+void RegisterModule(std::string name, VAddr beg, VAddr end, bool add_elf_ext = true);
+
 /**
  * Signal to the gdbstub server that it should halt CPU execution.
  *
@@ -69,7 +74,7 @@ void HandlePacket();
  * @param addr Address to search from.
  * @param type Type of breakpoint.
  */
-BreakpointAddress GetNextBreakpointFromAddress(PAddr addr, GDBStub::BreakpointType type);
+BreakpointAddress GetNextBreakpointFromAddress(VAddr addr, GDBStub::BreakpointType type);
 
 /**
  * Check if a breakpoint of the specified type exists at the given address.
@@ -77,12 +82,12 @@ BreakpointAddress GetNextBreakpointFromAddress(PAddr addr, GDBStub::BreakpointTy
  * @param addr Address of breakpoint.
  * @param type Type of breakpoint.
  */
-bool CheckBreakpoint(PAddr addr, GDBStub::BreakpointType type);
+bool CheckBreakpoint(VAddr addr, GDBStub::BreakpointType type);
 
-// If set to true, the CPU will halt at the beginning of the next CPU loop.
+/// If set to true, the CPU will halt at the beginning of the next CPU loop.
 bool GetCpuHaltFlag();
 
-// If set to true and the CPU is halted, the CPU will step one instruction.
+/// If set to true and the CPU is halted, the CPU will step one instruction.
 bool GetCpuStepFlag();
 
 /**
@@ -91,4 +96,12 @@ bool GetCpuStepFlag();
  * @param is_step
  */
 void SetCpuStepFlag(bool is_step);
-}
+
+/**
+ * Send trap signal from thread back to the gdbstub server.
+ *
+ * @param thread Sending thread.
+ * @param trap Trap no.
+ */
+void SendTrap(Kernel::Thread* thread, int trap);
+} // namespace GDBStub

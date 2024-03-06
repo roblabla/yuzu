@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <fmt/format.h>
 #include "common/common_types.h"
 
 namespace Log {
@@ -11,14 +12,14 @@ namespace Log {
 /// Specifies the severity or level of detail of the log message.
 enum class Level : u8 {
     Trace,    ///< Extremely detailed and repetitive debugging information that is likely to
-              ///  pollute logs.
+              ///< pollute logs.
     Debug,    ///< Less detailed debugging information.
     Info,     ///< Status information from important points during execution.
     Warning,  ///< Minor or potential problems found during execution of a task.
     Error,    ///< Major problems found during execution of a task that prevent it from being
-              ///  completed.
-    Critical, ///< Major problems during execution that threathen the stability of the entire
-              ///  application.
+              ///< completed.
+    Critical, ///< Major problems during execution that threaten the stability of the entire
+              ///< application.
 
     Count ///< Total number of logging levels
 };
@@ -48,18 +49,65 @@ enum class Class : ClassType {
     Kernel,            ///< The HLE implementation of the CTR kernel
     Kernel_SVC,        ///< Kernel system calls
     Service,           ///< HLE implementation of system services. Each major service
-                       ///  should have its own subclass.
-    Service_SM,        ///< The SRV (Service Directory) implementation
-    Service_FS,        ///< The FS (Filesystem) service implementation
-    Service_GSP,       ///< The GSP (GPU control) service
-    Service_CFG,       ///< The CFG (Configuration) service
-    Service_DSP,       ///< The DSP (DSP control) service
+                       ///< should have its own subclass.
+    Service_ACC,       ///< The ACC (Accounts) service
+    Service_AM,        ///< The AM (Applet manager) service
+    Service_AOC,       ///< The AOC (AddOn Content) service
+    Service_APM,       ///< The APM (Performance) service
+    Service_ARP,       ///< The ARP service
+    Service_Audio,     ///< The Audio (Audio control) service
+    Service_BCAT,      ///< The BCAT service
+    Service_BPC,       ///< The BPC service
+    Service_BTDRV,     ///< The Bluetooth driver service
+    Service_BTM,       ///< The BTM service
+    Service_Capture,   ///< The capture service
+    Service_ERPT,      ///< The error reporting service
+    Service_ETicket,   ///< The ETicket service
+    Service_EUPLD,     ///< The error upload service
+    Service_Fatal,     ///< The Fatal service
+    Service_FGM,       ///< The FGM service
+    Service_Friend,    ///< The friend service
+    Service_FS,        ///< The FS (Filesystem) service
+    Service_GRC,       ///< The game recording service
     Service_HID,       ///< The HID (Human interface device) service
+    Service_IRS,       ///< The IRS service
+    Service_LBL,       ///< The LBL (LCD backlight) service
+    Service_LDN,       ///< The LDN (Local domain network) service
+    Service_LDR,       ///< The loader service
+    Service_LM,        ///< The LM (Logger) service
+    Service_Migration, ///< The migration service
+    Service_Mii,       ///< The Mii service
+    Service_MM,        ///< The MM (Multimedia) service
+    Service_NCM,       ///< The NCM service
+    Service_NFC,       ///< The NFC (Near-field communication) service
+    Service_NFP,       ///< The NFP service
+    Service_NIFM,      ///< The NIFM (Network interface) service
+    Service_NIM,       ///< The NIM service
+    Service_NPNS,      ///< The NPNS service
+    Service_NS,        ///< The NS services
+    Service_NVDRV,     ///< The NVDRV (Nvidia driver) service
+    Service_PCIE,      ///< The PCIe service
+    Service_PCTL,      ///< The PCTL (Parental control) service
+    Service_PCV,       ///< The PCV service
+    Service_PM,        ///< The PM service
+    Service_PREPO,     ///< The PREPO (Play report) service
+    Service_PSC,       ///< The PSC service
+    Service_PSM,       ///< The PSM service
+    Service_SET,       ///< The SET (Settings) service
+    Service_SM,        ///< The SM (Service manager) service
+    Service_SPL,       ///< The SPL service
+    Service_SSL,       ///< The SSL service
+    Service_TCAP,      ///< The TCAP service.
+    Service_Time,      ///< The time service
+    Service_USB,       ///< The USB (Universal Serial Bus) service
+    Service_VI,        ///< The VI (Video interface) service
+    Service_WLAN,      ///< The WLAN (Wireless local area network) service
     HW,                ///< Low-level hardware emulation
     HW_Memory,         ///< Memory-map and address translation
     HW_LCD,            ///< LCD register emulation
     HW_GPU,            ///< GPU control emulation
     HW_AES,            ///< AES engine emulation
+    IPC,               ///< IPC interface
     Frontend,          ///< Emulator UI
     Render,            ///< Emulator video output and hardware acceleration
     Render_Software,   ///< Software renderer backend
@@ -68,44 +116,47 @@ enum class Class : ClassType {
     Audio_DSP,         ///< The HLE implementation of the DSP
     Audio_Sink,        ///< Emulator audio output backend
     Loader,            ///< ROM loader
+    Crypto,            ///< Cryptographic engine/functions
     Input,             ///< Input emulation
     Network,           ///< Network emulation
-    WebService,        ///< Interface to Citra Web Services
+    WebService,        ///< Interface to yuzu Web Services
     Count              ///< Total number of logging classes
 };
 
-/// Logs a message to the global logger.
-void LogMessage(Class log_class, Level log_level, const char* filename, unsigned int line_nr,
-                const char* function,
-#ifdef _MSC_VER
-                _Printf_format_string_
-#endif
-                const char* format,
-                ...)
-#ifdef __GNUC__
-    __attribute__((format(printf, 6, 7)))
-#endif
-    ;
+/// Logs a message to the global logger, using fmt
+void FmtLogMessageImpl(Class log_class, Level log_level, const char* filename,
+                       unsigned int line_num, const char* function, const char* format,
+                       const fmt::format_args& args);
+
+template <typename... Args>
+void FmtLogMessage(Class log_class, Level log_level, const char* filename, unsigned int line_num,
+                   const char* function, const char* format, const Args&... args) {
+    FmtLogMessageImpl(log_class, log_level, filename, line_num, function, format,
+                      fmt::make_format_args(args...));
+}
 
 } // namespace Log
 
-#define LOG_GENERIC(log_class, log_level, ...)                                                     \
-    ::Log::LogMessage(log_class, log_level, __FILE__, __LINE__, __func__, __VA_ARGS__)
-
 #ifdef _DEBUG
 #define LOG_TRACE(log_class, ...)                                                                  \
-    LOG_GENERIC(::Log::Class::log_class, ::Log::Level::Trace, __VA_ARGS__)
+    ::Log::FmtLogMessage(::Log::Class::log_class, ::Log::Level::Trace, __FILE__, __LINE__,         \
+                         __func__, __VA_ARGS__)
 #else
-#define LOG_TRACE(log_class, ...) (void(0))
+#define LOG_TRACE(log_class, fmt, ...) (void(0))
 #endif
 
 #define LOG_DEBUG(log_class, ...)                                                                  \
-    LOG_GENERIC(::Log::Class::log_class, ::Log::Level::Debug, __VA_ARGS__)
+    ::Log::FmtLogMessage(::Log::Class::log_class, ::Log::Level::Debug, __FILE__, __LINE__,         \
+                         __func__, __VA_ARGS__)
 #define LOG_INFO(log_class, ...)                                                                   \
-    LOG_GENERIC(::Log::Class::log_class, ::Log::Level::Info, __VA_ARGS__)
+    ::Log::FmtLogMessage(::Log::Class::log_class, ::Log::Level::Info, __FILE__, __LINE__,          \
+                         __func__, __VA_ARGS__)
 #define LOG_WARNING(log_class, ...)                                                                \
-    LOG_GENERIC(::Log::Class::log_class, ::Log::Level::Warning, __VA_ARGS__)
+    ::Log::FmtLogMessage(::Log::Class::log_class, ::Log::Level::Warning, __FILE__, __LINE__,       \
+                         __func__, __VA_ARGS__)
 #define LOG_ERROR(log_class, ...)                                                                  \
-    LOG_GENERIC(::Log::Class::log_class, ::Log::Level::Error, __VA_ARGS__)
+    ::Log::FmtLogMessage(::Log::Class::log_class, ::Log::Level::Error, __FILE__, __LINE__,         \
+                         __func__, __VA_ARGS__)
 #define LOG_CRITICAL(log_class, ...)                                                               \
-    LOG_GENERIC(::Log::Class::log_class, ::Log::Level::Critical, __VA_ARGS__)
+    ::Log::FmtLogMessage(::Log::Class::log_class, ::Log::Level::Critical, __FILE__, __LINE__,      \
+                         __func__, __VA_ARGS__)

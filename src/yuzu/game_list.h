@@ -17,9 +17,22 @@
 #include <QTreeView>
 #include <QVBoxLayout>
 #include <QWidget>
-#include "main.h"
+
+#include "common/common_types.h"
+#include "yuzu/compatibility_list.h"
 
 class GameListWorker;
+class GameListSearchField;
+class GMainWindow;
+
+namespace FileSys {
+class VfsFilesystem;
+}
+
+enum class GameListOpenTarget {
+    SaveData,
+    ModData,
+};
 
 class GameList : public QWidget {
     Q_OBJECT
@@ -27,45 +40,21 @@ class GameList : public QWidget {
 public:
     enum {
         COLUMN_NAME,
+        COLUMN_COMPATIBILITY,
+        COLUMN_ADD_ONS,
         COLUMN_FILE_TYPE,
         COLUMN_SIZE,
         COLUMN_COUNT, // Number of columns
     };
 
-    class SearchField : public QWidget {
-    public:
-        void setFilterResult(int visible, int total);
-        void clear();
-        void setFocus();
-        explicit SearchField(GameList* parent = nullptr);
-
-    private:
-        class KeyReleaseEater : public QObject {
-        public:
-            explicit KeyReleaseEater(GameList* gamelist);
-
-        private:
-            GameList* gamelist = nullptr;
-            QString edit_filter_text_old;
-
-        protected:
-            bool eventFilter(QObject* obj, QEvent* event);
-        };
-        QHBoxLayout* layout_filter = nullptr;
-        QTreeView* tree_view = nullptr;
-        QLabel* label_filter = nullptr;
-        QLineEdit* edit_filter = nullptr;
-        QLabel* label_filter_result = nullptr;
-        QToolButton* button_filter_close = nullptr;
-    };
-
-    explicit GameList(GMainWindow* parent = nullptr);
+    explicit GameList(std::shared_ptr<FileSys::VfsFilesystem> vfs, GMainWindow* parent = nullptr);
     ~GameList() override;
 
     void clearFilter();
     void setFilterFocus();
     void setFilterVisible(bool visibility);
 
+    void LoadCompatibilityList();
     void PopulateAsync(const QString& dir_path, bool deep_scan);
 
     void SaveInterfaceLayout();
@@ -76,7 +65,12 @@ public:
 signals:
     void GameChosen(QString game_path);
     void ShouldCancelWorker();
-    void OpenSaveFolderRequested(u64 program_id);
+    void OpenFolderRequested(u64 program_id, GameListOpenTarget target);
+    void DumpRomFSRequested(u64 program_id, const std::string& game_path);
+    void CopyTIDRequested(u64 program_id);
+    void NavigateToGamedbEntryRequested(u64 program_id,
+                                        const CompatibilityList& compatibility_list);
+    void OpenPerGameGeneralRequested(const std::string& file);
 
 private slots:
     void onTextChanged(const QString& newText);
@@ -89,13 +83,18 @@ private:
 
     void PopupContextMenu(const QPoint& menu_location);
     void RefreshGameDirectory();
-    bool containsAllWords(QString haystack, QString userinput);
 
-    SearchField* search_field;
+    std::shared_ptr<FileSys::VfsFilesystem> vfs;
+    GameListSearchField* search_field;
     GMainWindow* main_window = nullptr;
     QVBoxLayout* layout = nullptr;
     QTreeView* tree_view = nullptr;
     QStandardItemModel* item_model = nullptr;
     GameListWorker* current_worker = nullptr;
     QFileSystemWatcher* watcher = nullptr;
+    CompatibilityList compatibility_list;
+
+    friend class GameListSearchField;
 };
+
+Q_DECLARE_METATYPE(GameListOpenTarget);

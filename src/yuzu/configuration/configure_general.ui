@@ -7,23 +7,23 @@
     <x>0</x>
     <y>0</y>
     <width>300</width>
-    <height>377</height>
+    <height>407</height>
    </rect>
   </property>
   <property name="windowTitle">
    <string>Form</string>
   </property>
-  <layout class="QHBoxLayout" name="horizontalLayout">
+  <layout class="QHBoxLayout" name="HorizontalLayout">
    <item>
-    <layout class="QVBoxLayout" name="verticalLayout">
+    <layout class="QVBoxLayout" name="VerticalLayout">
      <item>
-      <widget class="QGroupBox" name="groupBox">
+      <widget class="QGroupBox" name="GeneralGroupBox">
        <property name="title">
         <string>General</string>
        </property>
-       <layout class="QHBoxLayout" name="horizontalLayout_3">
+       <layout class="QHBoxLayout" name="GeneralHorizontalLayout">
         <item>
-         <layout class="QVBoxLayout" name="verticalLayout_2">
+         <layout class="QVBoxLayout" name="GeneralVerticalLayout">
           <item>
            <widget class="QCheckBox" name="toggle_deepscan">
             <property name="text">
@@ -38,46 +38,93 @@
             </property>
            </widget>
           </item>
+          <item>
+           <widget class="QCheckBox" name="toggle_user_on_boot">
+            <property name="text">
+             <string>Prompt for user on game boot</string>
+            </property>
+           </widget>
+          </item>
          </layout>
         </item>
        </layout>
       </widget>
      </item>
      <item>
-       <widget class="QGroupBox" name="groupBox_2">
-         <property name="title">
-           <string>CPU Core</string>
-         </property>
-         <layout class="QHBoxLayout" name="horizontalLayout_7">
-           <item>
-             <layout class="QVBoxLayout" name="verticalLayout_5">
-               <item>
-                 <widget class="QComboBox" name="cpu_core_combobox">
-                  <item>
-                   <property name="text">
-                    <string>Unicorn</string>
-                   </property>
-                  </item>
-                  <item>
-                   <property name="text">
-                    <string>Dynarmic</string>
-                   </property>
-                  </item>
-                 </widget>
-               </item>
-             </layout>
-           </item>
+      <widget class="QGroupBox" name="PerformanceGroupBox">
+       <property name="title">
+        <string>Performance</string>
+       </property>
+       <layout class="QHBoxLayout" name="PerformanceHorizontalLayout">
+        <item>
+         <layout class="QVBoxLayout" name="PerformanceVerticalLayout">
+          <item>
+           <widget class="QCheckBox" name="use_cpu_jit">
+            <property name="text">
+             <string>Enable CPU JIT</string>
+            </property>
+           </widget>
+          </item>
          </layout>
-       </widget>
+        </item>
+       </layout>
+      </widget>
      </item>
      <item>
-      <widget class="QGroupBox" name="groupBox_3">
+      <widget class="QGroupBox" name="EmulationGroupBox">
+       <property name="title">
+        <string>Emulation</string>
+       </property>
+       <layout class="QHBoxLayout" name="EmulationHorizontalLayout">
+        <item>
+         <layout class="QVBoxLayout" name="EmulationVerticalLayout">
+          <item>
+           <widget class="QCheckBox" name="enable_nfc">
+            <property name="text">
+             <string>Enable NFC</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+     </item>
+     <item>
+      <widget class="QGroupBox" name="theme_group_box">
+       <property name="title">
+        <string>Theme</string>
+       </property>
+       <layout class="QHBoxLayout" name="theme_qhbox_layout">
+        <item>
+         <layout class="QVBoxLayout" name="theme_qvbox_layout">
+          <item>
+           <layout class="QHBoxLayout" name="theme_qhbox_layout_2">
+            <item>
+             <widget class="QLabel" name="theme_label">
+              <property name="text">
+               <string>Theme:</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QComboBox" name="theme_combobox"/>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+     </item>
+     <item>
+      <widget class="QGroupBox" name="HotKeysGroupBox">
        <property name="title">
         <string>Hotkeys</string>
        </property>
-       <layout class="QHBoxLayout" name="horizontalLayout_4">
+       <layout class="QHBoxLayout" name="HotKeysHorizontalLayout">
         <item>
-         <layout class="QVBoxLayout" name="verticalLayout_4">
+         <layout class="QVBoxLayout" name="HotKeysVerticalLayout">
           <item>
            <widget class="GHotkeysDialog" name="widget" native="true"/>
           </item>

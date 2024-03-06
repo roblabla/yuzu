@@ -10,6 +10,8 @@
 #include "common/common_types.h"
 #include "core/frontend/framebuffer_layout.h"
 
+namespace Core::Frontend {
+
 /**
  * Abstraction class used to provide an interface between emulation code and the frontend
  * (e.g. SDL, QGLWidget, GLFW, etc...).
@@ -32,9 +34,9 @@ class EmuWindow {
 public:
     /// Data structure to store emuwindow configuration
     struct WindowConfig {
-        bool fullscreen;
-        int res_width;
-        int res_height;
+        bool fullscreen = false;
+        int res_width = 0;
+        int res_height = 0;
         std::pair<unsigned, unsigned> min_client_area_size;
     };
 
@@ -166,3 +168,5 @@ private:
      */
     std::tuple<unsigned, unsigned> ClipToTouchScreen(unsigned new_x, unsigned new_y);
 };
+
+} // namespace Core::Frontend

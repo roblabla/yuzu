@@ -1,200 +1,208 @@
-﻿// Copyright 2016 Citra Emulator Project
+// Copyright 2016 Citra Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
 #include <algorithm>
 #include <memory>
-#include <utility>
+
 #include <QTimer>
-#include "common/param_package.h"
-#include "input_common/main.h"
-#include "yuzu/configuration/config.h"
+
+#include "configuration/configure_touchscreen_advanced.h"
+#include "core/core.h"
+#include "core/hle/service/am/am.h"
+#include "core/hle/service/am/applet_ae.h"
+#include "core/hle/service/am/applet_oe.h"
+#include "core/hle/service/hid/controllers/npad.h"
+#include "core/hle/service/sm/sm.h"
+#include "ui_configure_input.h"
+#include "ui_configure_input_player.h"
 #include "yuzu/configuration/configure_input.h"
+#include "yuzu/configuration/configure_input_player.h"
+#include "yuzu/configuration/configure_mouse_advanced.h"
 
+void OnDockedModeChanged(bool last_state, bool new_state) {
+    if (last_state == new_state) {
+        return;
+    }
 
-const std::array<std::string, ConfigureInput::ANALOG_SUB_BUTTONS_NUM>
-    ConfigureInput::analog_sub_buttons{{
-        "up", "down", "left", "right", "modifier",
-    }};
+    Core::System& system{Core::System::GetInstance()};
+    if (!system.IsPoweredOn()) {
+        return;
+    }
+    Service::SM::ServiceManager& sm = system.ServiceManager();
 
-static QString getKeyName(int key_code) {
-    switch (key_code) {
-    case Qt::Key_Shift:
-        return QObject::tr("Shift");
-    case Qt::Key_Control:
-        return QObject::tr("Ctrl");
-    case Qt::Key_Alt:
-        return QObject::tr("Alt");
-    case Qt::Key_Meta:
-        return "";
-    default:
-        return QKeySequence(key_code).toString();
+    // Message queue is shared between these services, we just need to signal an operation
+    // change to one and it will handle both automatically
+    auto applet_oe = sm.GetService<Service::AM::AppletOE>("appletOE");
+    auto applet_ae = sm.GetService<Service::AM::AppletAE>("appletAE");
+    bool has_signalled = false;
+
+    if (applet_oe != nullptr) {
+        applet_oe->GetMessageQueue()->OperationModeChanged();
+        has_signalled = true;
+    }
+
+    if (applet_ae != nullptr && !has_signalled) {
+        applet_ae->GetMessageQueue()->OperationModeChanged();
     }
 }
 
-static void SetButtonKey(int key, Common::ParamPackage& button_param) {
-    button_param = Common::ParamPackage{InputCommon::GenerateKeyboardParam(key)};
-}
+namespace {
+template <typename Dialog, typename... Args>
+void CallConfigureDialog(ConfigureInput& parent, Args&&... args) {
+    parent.applyConfiguration();
+    Dialog dialog(&parent, std::forward<Args>(args)...);
 
-static void SetAnalogKey(int key, Common::ParamPackage& analog_param,
-                         const std::string& button_name) {
-    if (analog_param.Get("engine", "") != "analog_from_button") {
-        analog_param = {
-            {"engine", "analog_from_button"}, {"modifier_scale", "0.5"},
-        };
+    const auto res = dialog.exec();
+    if (res == QDialog::Accepted) {
+        dialog.applyConfiguration();
     }
-    analog_param.Set(button_name, InputCommon::GenerateKeyboardParam(key));
 }
+} // Anonymous namespace
 
 ConfigureInput::ConfigureInput(QWidget* parent)
-    : QWidget(parent), ui(std::make_unique<Ui::ConfigureInput>()),
-      timer(std::make_unique<QTimer>()) {
-
+    : QDialog(parent), ui(std::make_unique<Ui::ConfigureInput>()) {
     ui->setupUi(this);
-    setFocusPolicy(Qt::ClickFocus);
 
-    button_map = {
-        ui->buttonA,        ui->buttonB,        ui->buttonX,         ui->buttonY,  ui->buttonDpadUp,
-        ui->buttonDpadDown, ui->buttonDpadLeft, ui->buttonDpadRight, ui->buttonL,  ui->buttonR,
-        ui->buttonStart,    ui->buttonSelect,   ui->buttonZL,        ui->buttonZR, ui->buttonHome,
+    players_controller = {
+        ui->player1_combobox, ui->player2_combobox, ui->player3_combobox, ui->player4_combobox,
+        ui->player5_combobox, ui->player6_combobox, ui->player7_combobox, ui->player8_combobox,
     };
 
-    analog_map = {{
-        {
-            ui->buttonCircleUp, ui->buttonCircleDown, ui->buttonCircleLeft, ui->buttonCircleRight,
-            ui->buttonCircleMod,
-        },
-        {
-            ui->buttonCStickUp, ui->buttonCStickDown, ui->buttonCStickLeft, ui->buttonCStickRight,
-            nullptr,
-        },
-    }};
+    players_configure = {
+        ui->player1_configure, ui->player2_configure, ui->player3_configure, ui->player4_configure,
+        ui->player5_configure, ui->player6_configure, ui->player7_configure, ui->player8_configure,
+    };
 
-    for (int button_id = 0; button_id < Settings::NativeButton::NumButtons; button_id++) {
-        if (button_map[button_id])
-            connect(button_map[button_id], &QPushButton::released, [=]() {
-                handleClick(button_map[button_id],
-                            [=](int key) { SetButtonKey(key, buttons_param[button_id]); });
-            });
+    for (auto* controller_box : players_controller) {
+        controller_box->addItems({"None", "Pro Controller", "Dual Joycons", "Single Right Joycon",
+                                  "Single Left Joycon"});
     }
 
-    for (int analog_id = 0; analog_id < Settings::NativeAnalog::NumAnalogs; analog_id++) {
-        for (int sub_button_id = 0; sub_button_id < ANALOG_SUB_BUTTONS_NUM; sub_button_id++) {
-            if (analog_map[analog_id][sub_button_id] != nullptr) {
-                connect(analog_map[analog_id][sub_button_id], &QPushButton::released, [=]() {
-                    handleClick(analog_map[analog_id][sub_button_id], [=](int key) {
-                        SetAnalogKey(key, analogs_param[analog_id],
-                                     analog_sub_buttons[sub_button_id]);
-                    });
-                });
-            }
+    this->loadConfiguration();
+    updateUIEnabled();
+
+    connect(ui->restore_defaults_button, &QPushButton::pressed, this,
+            &ConfigureInput::restoreDefaults);
+
+    for (auto* enabled : players_controller)
+        connect(enabled, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                &ConfigureInput::updateUIEnabled);
+    connect(ui->use_docked_mode, &QCheckBox::stateChanged, this, &ConfigureInput::updateUIEnabled);
+    connect(ui->handheld_connected, &QCheckBox::stateChanged, this,
+            &ConfigureInput::updateUIEnabled);
+    connect(ui->mouse_enabled, &QCheckBox::stateChanged, this, &ConfigureInput::updateUIEnabled);
+    connect(ui->keyboard_enabled, &QCheckBox::stateChanged, this, &ConfigureInput::updateUIEnabled);
+    connect(ui->debug_enabled, &QCheckBox::stateChanged, this, &ConfigureInput::updateUIEnabled);
+    connect(ui->touchscreen_enabled, &QCheckBox::stateChanged, this,
+            &ConfigureInput::updateUIEnabled);
+
+    for (std::size_t i = 0; i < players_configure.size(); ++i) {
+        connect(players_configure[i], &QPushButton::pressed, this,
+                [this, i] { CallConfigureDialog<ConfigureInputPlayer>(*this, i, false); });
+    }
+
+    connect(ui->handheld_configure, &QPushButton::pressed, this,
+            [this] { CallConfigureDialog<ConfigureInputPlayer>(*this, 8, false); });
+
+    connect(ui->debug_configure, &QPushButton::pressed, this,
+            [this] { CallConfigureDialog<ConfigureInputPlayer>(*this, 9, true); });
+
+    connect(ui->mouse_advanced, &QPushButton::pressed, this,
+            [this] { CallConfigureDialog<ConfigureMouseAdvanced>(*this); });
+
+    connect(ui->touchscreen_advanced, &QPushButton::pressed, this,
+            [this] { CallConfigureDialog<ConfigureTouchscreenAdvanced>(*this); });
+}
+
+ConfigureInput::~ConfigureInput() = default;
+
+void ConfigureInput::applyConfiguration() {
+    for (std::size_t i = 0; i < players_controller.size(); ++i) {
+        const auto controller_type_index = players_controller[i]->currentIndex();
+
+        Settings::values.players[i].connected = controller_type_index != 0;
+
+        if (controller_type_index > 0) {
+            Settings::values.players[i].type =
+                static_cast<Settings::ControllerType>(controller_type_index - 1);
+        } else {
+            Settings::values.players[i].type = Settings::ControllerType::DualJoycon;
         }
     }
 
-    connect(ui->buttonRestoreDefaults, &QPushButton::released, [this]() { restoreDefaults(); });
-
-    timer->setSingleShot(true);
-    connect(timer.get(), &QTimer::timeout, [this]() {
-        releaseKeyboard();
-        releaseMouse();
-        key_setter = boost::none;
-        updateButtonLabels();
-    });
-
-    this->loadConfiguration();
-
-    // TODO(wwylele): enable this when we actually emulate it
-    ui->buttonHome->setEnabled(false);
+    const bool pre_docked_mode = Settings::values.use_docked_mode;
+    Settings::values.use_docked_mode = ui->use_docked_mode->isChecked();
+    OnDockedModeChanged(pre_docked_mode, Settings::values.use_docked_mode);
+    Settings::values
+        .players[Service::HID::Controller_NPad::NPadIdToIndex(Service::HID::NPAD_HANDHELD)]
+        .connected = ui->handheld_connected->isChecked();
+    Settings::values.debug_pad_enabled = ui->debug_enabled->isChecked();
+    Settings::values.mouse_enabled = ui->mouse_enabled->isChecked();
+    Settings::values.keyboard_enabled = ui->keyboard_enabled->isChecked();
+    Settings::values.touchscreen.enabled = ui->touchscreen_enabled->isChecked();
 }
 
-void ConfigureInput::applyConfiguration() {
-    std::transform(buttons_param.begin(), buttons_param.end(), Settings::values.buttons.begin(),
-                   [](const Common::ParamPackage& param) { return param.Serialize(); });
-    std::transform(analogs_param.begin(), analogs_param.end(), Settings::values.analogs.begin(),
-                   [](const Common::ParamPackage& param) { return param.Serialize(); });
+void ConfigureInput::updateUIEnabled() {
+    bool hit_disabled = false;
+    for (auto* player : players_controller) {
+        player->setDisabled(hit_disabled);
+        if (hit_disabled)
+            player->setCurrentIndex(0);
+        if (!hit_disabled && player->currentIndex() == 0)
+            hit_disabled = true;
+    }
 
-    Settings::Apply();
+    for (std::size_t i = 0; i < players_controller.size(); ++i) {
+        players_configure[i]->setEnabled(players_controller[i]->currentIndex() != 0);
+    }
+
+    ui->handheld_connected->setEnabled(!ui->use_docked_mode->isChecked());
+    ui->handheld_configure->setEnabled(ui->handheld_connected->isChecked() &&
+                                       !ui->use_docked_mode->isChecked());
+    ui->mouse_advanced->setEnabled(ui->mouse_enabled->isChecked());
+    ui->debug_configure->setEnabled(ui->debug_enabled->isChecked());
+    ui->touchscreen_advanced->setEnabled(ui->touchscreen_enabled->isChecked());
 }
 
 void ConfigureInput::loadConfiguration() {
-    std::transform(Settings::values.buttons.begin(), Settings::values.buttons.end(),
-                   buttons_param.begin(),
-                   [](const std::string& str) { return Common::ParamPackage(str); });
-    std::transform(Settings::values.analogs.begin(), Settings::values.analogs.end(),
-                   analogs_param.begin(),
-                   [](const std::string& str) { return Common::ParamPackage(str); });
-    updateButtonLabels();
+    std::stable_partition(
+        Settings::values.players.begin(),
+        Settings::values.players.begin() +
+            Service::HID::Controller_NPad::NPadIdToIndex(Service::HID::NPAD_HANDHELD),
+        [](const auto& player) { return player.connected; });
+
+    for (std::size_t i = 0; i < players_controller.size(); ++i) {
+        const auto connected = Settings::values.players[i].connected;
+        players_controller[i]->setCurrentIndex(
+            connected ? static_cast<u8>(Settings::values.players[i].type) + 1 : 0);
+    }
+
+    ui->use_docked_mode->setChecked(Settings::values.use_docked_mode);
+    ui->handheld_connected->setChecked(
+        Settings::values
+            .players[Service::HID::Controller_NPad::NPadIdToIndex(Service::HID::NPAD_HANDHELD)]
+            .connected);
+    ui->debug_enabled->setChecked(Settings::values.debug_pad_enabled);
+    ui->mouse_enabled->setChecked(Settings::values.mouse_enabled);
+    ui->keyboard_enabled->setChecked(Settings::values.keyboard_enabled);
+    ui->touchscreen_enabled->setChecked(Settings::values.touchscreen.enabled);
+
+    updateUIEnabled();
 }
 
 void ConfigureInput::restoreDefaults() {
-    for (int button_id = 0; button_id < Settings::NativeButton::NumButtons; button_id++) {
-        SetButtonKey(Config::default_buttons[button_id], buttons_param[button_id]);
+    players_controller[0]->setCurrentIndex(2);
+
+    for (std::size_t i = 1; i < players_controller.size(); ++i) {
+        players_controller[i]->setCurrentIndex(0);
     }
 
-    for (int analog_id = 0; analog_id < Settings::NativeAnalog::NumAnalogs; analog_id++) {
-        for (int sub_button_id = 0; sub_button_id < ANALOG_SUB_BUTTONS_NUM; sub_button_id++) {
-            SetAnalogKey(Config::default_analogs[analog_id][sub_button_id],
-                         analogs_param[analog_id], analog_sub_buttons[sub_button_id]);
-        }
-    }
-    updateButtonLabels();
-    applyConfiguration();
-}
-
-void ConfigureInput::updateButtonLabels() {
-    QString non_keyboard(tr("[non-keyboard]"));
-
-    auto KeyToText = [&non_keyboard](const Common::ParamPackage& param) {
-        if (param.Get("engine", "") != "keyboard") {
-            return non_keyboard;
-        } else {
-            return getKeyName(param.Get("code", 0));
-        }
-    };
-
-    for (int button = 0; button < Settings::NativeButton::NumButtons; button++) {
-        button_map[button]->setText(KeyToText(buttons_param[button]));
-    }
-
-    for (int analog_id = 0; analog_id < Settings::NativeAnalog::NumAnalogs; analog_id++) {
-        if (analogs_param[analog_id].Get("engine", "") != "analog_from_button") {
-            for (QPushButton* button : analog_map[analog_id]) {
-                if (button)
-                    button->setText(non_keyboard);
-            }
-        } else {
-            for (int sub_button_id = 0; sub_button_id < ANALOG_SUB_BUTTONS_NUM; sub_button_id++) {
-                Common::ParamPackage param(
-                    analogs_param[analog_id].Get(analog_sub_buttons[sub_button_id], ""));
-                if (analog_map[analog_id][sub_button_id])
-                    analog_map[analog_id][sub_button_id]->setText(KeyToText(param));
-            }
-        }
-    }
-}
-
-void ConfigureInput::handleClick(QPushButton* button, std::function<void(int)> new_key_setter) {
-    button->setText(tr("[press key]"));
-    button->setFocus();
-
-    key_setter = new_key_setter;
-
-    grabKeyboard();
-    grabMouse();
-    timer->start(5000); // Cancel after 5 seconds
-}
-
-void ConfigureInput::keyPressEvent(QKeyEvent* event) {
-    releaseKeyboard();
-    releaseMouse();
-
-    if (!key_setter || !event)
-        return;
-
-    if (event->key() != Qt::Key_Escape)
-        (*key_setter)(event->key());
-
-    updateButtonLabels();
-    key_setter = boost::none;
-    timer->stop();
+    ui->use_docked_mode->setCheckState(Qt::Unchecked);
+    ui->handheld_connected->setCheckState(Qt::Unchecked);
+    ui->mouse_enabled->setCheckState(Qt::Unchecked);
+    ui->keyboard_enabled->setCheckState(Qt::Unchecked);
+    ui->debug_enabled->setCheckState(Qt::Unchecked);
+    ui->touchscreen_enabled->setCheckState(Qt::Checked);
+    updateUIEnabled();
 }

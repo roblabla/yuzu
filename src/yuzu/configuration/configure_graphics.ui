@@ -23,9 +23,36 @@
        </property>
        <layout class="QVBoxLayout" name="verticalLayout_2">
         <item>
-         <widget class="QCheckBox" name="toggle_framelimit">
+         <layout class="QHBoxLayout" name="horizontalLayout_2">
+          <item>
+           <widget class="QCheckBox" name="toggle_frame_limit">
+            <property name="text">
+             <string>Limit Speed Percent</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QSpinBox" name="frame_limit">
+            <property name="suffix">
+             <string>%</string>
+            </property>
+            <property name="minimum">
+             <number>1</number>
+            </property>
+            <property name="maximum">
+             <number>9999</number>
+            </property>
+            <property name="value">
+             <number>100</number>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <widget class="QCheckBox" name="use_accurate_gpu_emulation">
           <property name="text">
-           <string>Limit framerate</string>
+           <string>Use accurate GPU emulation (slow)</string>
           </property>
          </widget>
         </item>
@@ -34,7 +61,7 @@
           <item>
            <widget class="QLabel" name="label">
             <property name="text">
-             <string>Internal Resolution:</string>
+             <string>Internal Resolution</string>
             </property>
            </widget>
           </item>
@@ -47,54 +74,45 @@
             </item>
             <item>
              <property name="text">
-              <string>Native (400x240)</string>
+              <string>Native (1280x720)</string>
              </property>
             </item>
             <item>
              <property name="text">
-              <string>2x Native (800x480)</string>
+              <string>2x Native (2560x1440)</string>
              </property>
             </item>
             <item>
              <property name="text">
-              <string>3x Native (1200x720)</string>
+              <string>3x Native (3840x2160)</string>
              </property>
             </item>
             <item>
              <property name="text">
-              <string>4x Native (1600x960)</string>
+              <string>4x Native (5120x2880)</string>
              </property>
             </item>
-            <item>
-             <property name="text">
-              <string>5x Native (2000x1200)</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>6x Native (2400x1440)</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>7x Native (2800x1680)</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>8x Native (3200x1920)</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>9x Native (3600x2160)</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>10x Native (4000x2400)</string>
-             </property>
-            </item>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayout_6">
+          <item>
+           <widget class="QLabel" name="bg_label">
+            <property name="text">
+             <string>Background Color:</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="bg_button">
+            <property name="maximumSize">
+             <size>
+              <width>40</width>
+              <height>16777215</height>
+             </size>
+            </property>
            </widget>
           </item>
          </layout>

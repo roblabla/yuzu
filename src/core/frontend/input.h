@@ -59,7 +59,7 @@ template <typename InputDeviceType>
 void RegisterFactory(const std::string& name, std::shared_ptr<Factory<InputDeviceType>> factory) {
     auto pair = std::make_pair(name, std::move(factory));
     if (!Impl::FactoryList<InputDeviceType>::list.insert(std::move(pair)).second) {
-        LOG_ERROR(Input, "Factory %s already registered", name.c_str());
+        LOG_ERROR(Input, "Factory '{}' already registered", name);
     }
 }
 
@@ -71,7 +71,7 @@ void RegisterFactory(const std::string& name, std::shared_ptr<Factory<InputDevic
 template <typename InputDeviceType>
 void UnregisterFactory(const std::string& name) {
     if (Impl::FactoryList<InputDeviceType>::list.erase(name) == 0) {
-        LOG_ERROR(Input, "Factory %s not registered", name.c_str());
+        LOG_ERROR(Input, "Factory '{}' not registered", name);
     }
 }
 
@@ -88,7 +88,7 @@ std::unique_ptr<InputDeviceType> CreateDevice(const std::string& params) {
     const auto pair = factory_list.find(engine);
     if (pair == factory_list.end()) {
         if (engine != "null") {
-            LOG_ERROR(Input, "Unknown engine name: %s", engine.c_str());
+            LOG_ERROR(Input, "Unknown engine name: {}", engine);
         }
         return std::make_unique<InputDeviceType>();
     }
@@ -131,5 +131,12 @@ using MotionDevice = InputDevice<std::tuple<Math::Vec3<float>, Math::Vec3<float>
  * x and y coordinates in the range 0.0 - 1.0, and the bool indicates whether it is pressed.
  */
 using TouchDevice = InputDevice<std::tuple<float, float, bool>>;
+
+/**
+ * A mouse device is an input device that returns a tuple of two floats and four ints.
+ * The first two floats are X and Y device coordinates of the mouse (from 0-1).
+ * The s32s are the mouse wheel.
+ */
+using MouseDevice = InputDevice<std::tuple<float, float, s32, s32>>;
 
 } // namespace Input

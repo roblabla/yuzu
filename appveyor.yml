@@ -13,8 +13,8 @@ environment:
   # Tell msys2 to inherit the current directory when starting the shell
   CHERE_INVOKING: 1
   matrix:
-    - BUILD_TYPE: mingw
     - BUILD_TYPE: msvc
+    - BUILD_TYPE: mingw
 
 platform:
   - x64
@@ -28,7 +28,6 @@ install:
         if ($env:BUILD_TYPE -eq 'mingw') {
           $dependencies = "mingw64/mingw-w64-x86_64-cmake",
                           "mingw64/mingw-w64-x86_64-qt5",
-                          "mingw64/mingw-w64-x86_64-curl",
                           "mingw64/mingw-w64-x86_64-SDL2"
           # redirect err to null to prevent warnings from becoming errors
           # workaround to prevent pacman from failing due to cyclical dependencies
@@ -40,11 +39,12 @@ before_build:
   - mkdir %BUILD_TYPE%_build
   - cd %BUILD_TYPE%_build
   - ps: |
+        $COMPAT = if ($env:ENABLE_COMPATIBILITY_REPORTING -eq $null) {0} else {$env:ENABLE_COMPATIBILITY_REPORTING}
         if ($env:BUILD_TYPE -eq 'msvc') {
           # redirect stderr and change the exit code to prevent powershell from cancelling the build if cmake prints a warning
-          cmd /C 'cmake -G "Visual Studio 15 2017 Win64" -DYUZU_USE_BUNDLED_QT=1 -DYUZU_USE_BUNDLED_SDL2=1 -DYUZU_USE_BUNDLED_UNICORN=1 -DCMAKE_USE_OPENSSL=0 .. 2>&1 && exit 0'
+          cmd /C 'cmake -G "Visual Studio 15 2017 Win64" -DYUZU_USE_BUNDLED_QT=1 -DYUZU_USE_BUNDLED_SDL2=1 -DYUZU_USE_BUNDLED_UNICORN=1 -DYUZU_USE_QT_WEB_ENGINE=ON -DENABLE_COMPATIBILITY_LIST_DOWNLOAD=ON -DYUZU_ENABLE_COMPATIBILITY_REPORTING=${COMPAT} -DUSE_DISCORD_PRESENCE=ON .. 2>&1 && exit 0'
         } else {
-          C:\msys64\usr\bin\bash.exe -lc "cmake -G 'MSYS Makefiles' -DUSE_SYSTEM_CURL=1 -DYUZU_USE_BUNDLED_CURL=1 -DCMAKE_BUILD_TYPE=Release .. 2>&1"
+          C:\msys64\usr\bin\bash.exe -lc "cmake -G 'MSYS Makefiles' -DYUZU_BUILD_UNICORN=1 -DCMAKE_BUILD_TYPE=Release -DENABLE_COMPATIBILITY_LIST_DOWNLOAD=ON -DYUZU_ENABLE_COMPATIBILITY_REPORTING=${COMPAT} -DUSE_DISCORD_PRESENCE=ON .. 2>&1"
         }
   - cd ..
 
@@ -81,11 +81,20 @@ after_build:
           $env:BUILD_SYMBOLS = $MSVC_BUILD_PDB
           $env:BUILD_UPDATE = $MSVC_SEVENZIP
 
-          7z a -tzip $MSVC_BUILD_PDB .\msvc_build\bin\release\*.pdb
-          rm .\msvc_build\bin\release\*.pdb
+          $BUILD_DIR = ".\msvc_build\bin\Release"
+
+          # Make a debug symbol upload
+          mkdir pdb
+          Get-ChildItem "$BUILD_DIR\" -Recurse -Filter "*.pdb" | Copy-Item -destination .\pdb
+          7z a -tzip $MSVC_BUILD_PDB .\pdb\*.pdb
+          rm "$BUILD_DIR\*.pdb"
 
           mkdir $RELEASE_DIST
-          Copy-Item .\msvc_build\bin\release\* -Destination $RELEASE_DIST -Recurse
+          # get rid of extra exes by copying everything over, then deleting all the exes, then copying just the exes we want
+          Copy-Item "$BUILD_DIR\*" -Destination $RELEASE_DIST -Recurse
+          rm "$RELEASE_DIST\*.exe"
+          Get-ChildItem "$BUILD_DIR" -Recurse -Filter "yuzu*.exe" | Copy-Item -destination $RELEASE_DIST
+          Get-ChildItem "$BUILD_DIR" -Recurse -Filter "QtWebEngineProcess*.exe" | Copy-Item -destination $RELEASE_DIST
           Copy-Item .\license.txt -Destination $RELEASE_DIST
           Copy-Item .\README.md -Destination $RELEASE_DIST
           7z a -tzip $MSVC_BUILD_ZIP $RELEASE_DIST\*
@@ -104,39 +113,39 @@ after_build:
           $env:BUILD_UPDATE = $MINGW_SEVENZIP
 
           $CMAKE_SOURCE_DIR = "$env:APPVEYOR_BUILD_FOLDER"
-          $CMAKE_BINARY_DIR = "$CMAKE_SOURCE_DIR/mingw_build"
+          $CMAKE_BINARY_DIR = "$CMAKE_SOURCE_DIR/mingw_build/bin"
           $RELEASE_DIST = $RELEASE_DIST + "-mingw"
 
           mkdir $RELEASE_DIST
           mkdir $RELEASE_DIST/platforms
+          mkdir $RELEASE_DIST/styles
+          mkdir $RELEASE_DIST/imageformats
 
           # copy the compiled binaries and other release files to the release folder
-          Get-ChildItem "$CMAKE_BINARY_DIR" -Recurse -Filter "yuzu*.exe" | Copy-Item -destination $RELEASE_DIST
-          # copy the libcurl dll
-          Get-ChildItem "$CMAKE_BINARY_DIR" -Recurse -Filter "libcurl.dll" | Copy-Item -destination $RELEASE_DIST
+          Get-ChildItem "$CMAKE_BINARY_DIR" -Filter "yuzu*.exe" | Copy-Item -destination $RELEASE_DIST
           Copy-Item -path "$CMAKE_SOURCE_DIR/license.txt" -destination $RELEASE_DIST
           Copy-Item -path "$CMAKE_SOURCE_DIR/README.md" -destination $RELEASE_DIST
-          # copy all the dll dependencies to the release folder
-          # hardcoded list because we don't build static and determining the list of dlls from the binary is a pain.
-          $MingwDLLs = "Qt5Core.dll","Qt5Widgets.dll","Qt5Gui.dll","Qt5OpenGL.dll",
-                       # QT dll dependencies
-                       "libbz2-*.dll","libicudt*.dll","libicuin*.dll","libicuuc*.dll","libffi-*.dll",
-                       "libfreetype-*.dll","libglib-*.dll","libgobject-*.dll","libgraphite2.dll","libiconv-*.dll",
-                       "libharfbuzz-*.dll","libintl-*.dll","libpcre-*.dll","libpcre16-*.dll","libpng16-*.dll",
-                       # Runtime/Other dependencies
-                       "libgcc_s_seh-*.dll","libstdc++-*.dll","libwinpthread-*.dll","SDL2.dll","zlib1.dll"
-          foreach ($file in $MingwDLLs) {
-            Copy-Item -path "C:/msys64/mingw64/bin/$file" -force -destination "$RELEASE_DIST"
-          }
-          # the above list copies a few extra debug dlls that aren't needed (thanks globbing patterns!)
-          # so we can remove them by hardcoding another list of extra dlls to remove
-          $DebugDLLs = "libicudtd*.dll","libicuind*.dll","libicuucd*.dll"
-          foreach ($file in $DebugDLLs) {
-            Remove-Item -path "$RELEASE_DIST/$file"
-          }
 
           # copy the qt windows plugin dll to platforms
           Copy-Item -path "C:/msys64/mingw64/share/qt5/plugins/platforms/qwindows.dll" -force -destination "$RELEASE_DIST/platforms"
+
+          # copy the qt windows vista style dll to platforms
+          Copy-Item -path "C:/msys64/mingw64/share/qt5/plugins/styles/qwindowsvistastyle.dll" -force -destination "$RELEASE_DIST/styles"
+
+          # copy the qt jpeg imageformat dll to platforms
+          Copy-Item -path "C:/msys64/mingw64/share/qt5/plugins/imageformats/qjpeg.dll" -force -destination "$RELEASE_DIST/imageformats"
+
+          # copy all the dll dependencies to the release folder
+          . "./.appveyor/UtilityFunctions.ps1"
+          $DLLSearchPath = "C:\msys64\mingw64\bin;$env:PATH"
+          $MingwDLLs = RecursivelyGetDeps $DLLSearchPath "$RELEASE_DIST\yuzu.exe"
+          $MingwDLLs += RecursivelyGetDeps $DLLSearchPath  "$RELEASE_DIST\yuzu_cmd.exe"
+          $MingwDLLs += RecursivelyGetDeps $DLLSearchPath  "$RELEASE_DIST\imageformats\qjpeg.dll"
+          Write-Host "Detected the following dependencies:"
+          Write-Host $MingwDLLs
+          foreach ($file in $MingwDLLs) {
+            Copy-Item -path "$file" -force -destination "$RELEASE_DIST"
+          }
 
           7z a -tzip $MINGW_BUILD_ZIP $RELEASE_DIST\*
           7z a $MINGW_SEVENZIP $RELEASE_DIST
@@ -156,16 +165,12 @@ artifacts:
   - path: $(BUILD_ZIP)
     name: build
     type: zip
-  - path: $(BUILD_SYMBOLS)
-    name: debugsymbols
-  - path: $(BUILD_UPDATE)
-    name: update
 
 deploy:
   provider: GitHub
   release: $(appveyor_repo_tag_name)
   auth_token:
-    secure: "dbpsMC/MgPKWFNJCXpQl4cR8FYhepkPLjgNp/pRMktZ8oLKTqPYErfreaIxb/4P1"
+    secure: QqePPnXbkzmXct5c8hZ2X5AbsthbI6cS1Sr+VBzcD8oUOIjfWJJKXVAQGUbQAbb0
   artifact: update,build
   draft: false
   prerelease: false
