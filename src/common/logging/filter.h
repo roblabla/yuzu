@@ -1,15 +1,25 @@
-// Copyright 2014 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2014 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstddef>
-#include <string>
 #include "common/logging/log.h"
 
-namespace Log {
+namespace Common::Log {
+
+/**
+ * Returns the name of the passed log class as a C-string. Subclasses are separated by periods
+ * instead of underscores as in the enumeration.
+ */
+const char* GetLogClassName(Class log_class);
+
+/**
+ * Returns the name of the passed log level as a C-string.
+ */
+const char* GetLevelName(Level log_level);
 
 /**
  * Implements a log message filter which allows different log classes to have different minimum
@@ -19,7 +29,7 @@ namespace Log {
 class Filter {
 public:
     /// Initializes the filter with all classes having `default_level` as the minimum level.
-    Filter(Level default_level);
+    explicit Filter(Level default_level = Level::Info);
 
     /// Resets the filter so that all classes have `level` as the minimum displayed level.
     void ResetAll(Level level);
@@ -40,14 +50,15 @@ public:
      *  - `Service:Info` -- Sets the level of Service to Info.
      *  - `Service.FS:Trace` -- Sets the level of the Service.FS class to Trace.
      */
-    void ParseFilterString(const std::string& filter_str);
-    bool ParseFilterRule(const std::string::const_iterator start,
-                         const std::string::const_iterator end);
+    void ParseFilterString(std::string_view filter_view);
 
     /// Matches class/level combination against the filter, returning true if it passed.
     bool CheckMessage(Class log_class, Level level) const;
 
+    /// Returns true if any logging classes are set to debug
+    bool IsDebug() const;
+
 private:
-    std::array<Level, (size_t)Class::Count> class_levels;
+    std::array<Level, static_cast<std::size_t>(Class::Count)> class_levels;
 };
-}
+} // namespace Common::Log

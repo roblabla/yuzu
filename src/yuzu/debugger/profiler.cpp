@@ -1,12 +1,12 @@
-// Copyright 2015 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2015 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <QAction>
 #include <QLayout>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QString>
+#include <QTimer>
 #include "common/common_types.h"
 #include "common/microprofile.h"
 #include "yuzu/debugger/profiler.h"
@@ -46,11 +46,11 @@ private:
 #endif
 
 MicroProfileDialog::MicroProfileDialog(QWidget* parent) : QWidget(parent, Qt::Dialog) {
-    setObjectName("MicroProfile");
-    setWindowTitle(tr("MicroProfile"));
+    setObjectName(QStringLiteral("MicroProfile"));
+    setWindowTitle(tr("&MicroProfile"));
     resize(1000, 600);
-    // Remove the "?" button from the titlebar and enable the maximize button
-    setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint | Qt::WindowMaximizeButtonHint);
+    // Enable the maximize button
+    setWindowFlags(windowFlags() | Qt::WindowMaximizeButtonHint);
 
 #if MICROPROFILE_ENABLED
 
@@ -74,7 +74,7 @@ QAction* MicroProfileDialog::toggleViewAction() {
         toggle_view_action = new QAction(windowTitle(), this);
         toggle_view_action->setCheckable(true);
         toggle_view_action->setChecked(isVisible());
-        connect(toggle_view_action, SIGNAL(toggled(bool)), SLOT(setVisible(bool)));
+        connect(toggle_view_action, &QAction::toggled, this, &MicroProfileDialog::setVisible);
     }
 
     return toggle_view_action;
@@ -107,7 +107,7 @@ MicroProfileWidget::MicroProfileWidget(QWidget* parent) : QWidget(parent) {
     MicroProfileSetDisplayMode(1); // Timers screen
     MicroProfileInitUI();
 
-    connect(&update_timer, SIGNAL(timeout()), SLOT(update()));
+    connect(&update_timer, &QTimer::timeout, this, qOverload<>(&MicroProfileWidget::update));
 }
 
 void MicroProfileWidget::paintEvent(QPaintEvent* ev) {
@@ -141,24 +141,29 @@ void MicroProfileWidget::hideEvent(QHideEvent* ev) {
 }
 
 void MicroProfileWidget::mouseMoveEvent(QMouseEvent* ev) {
-    MicroProfileMousePosition(ev->x() / x_scale, ev->y() / y_scale, 0);
+    const auto mouse_position = ev->pos();
+    MicroProfileMousePosition(mouse_position.x() / x_scale, mouse_position.y() / y_scale, 0);
     ev->accept();
 }
 
 void MicroProfileWidget::mousePressEvent(QMouseEvent* ev) {
-    MicroProfileMousePosition(ev->x() / x_scale, ev->y() / y_scale, 0);
+    const auto mouse_position = ev->pos();
+    MicroProfileMousePosition(mouse_position.x() / x_scale, mouse_position.y() / y_scale, 0);
     MicroProfileMouseButton(ev->buttons() & Qt::LeftButton, ev->buttons() & Qt::RightButton);
     ev->accept();
 }
 
 void MicroProfileWidget::mouseReleaseEvent(QMouseEvent* ev) {
-    MicroProfileMousePosition(ev->x() / x_scale, ev->y() / y_scale, 0);
+    const auto mouse_position = ev->pos();
+    MicroProfileMousePosition(mouse_position.x() / x_scale, mouse_position.y() / y_scale, 0);
     MicroProfileMouseButton(ev->buttons() & Qt::LeftButton, ev->buttons() & Qt::RightButton);
     ev->accept();
 }
 
 void MicroProfileWidget::wheelEvent(QWheelEvent* ev) {
-    MicroProfileMousePosition(ev->x() / x_scale, ev->y() / y_scale, ev->delta() / 120);
+    const auto wheel_position = ev->position().toPoint();
+    MicroProfileMousePosition(wheel_position.x() / x_scale, wheel_position.y() / y_scale,
+                              ev->angleDelta().y() / 120);
     ev->accept();
 }
 
@@ -189,7 +194,7 @@ void MicroProfileDrawText(int x, int y, u32 hex_color, const char* text, u32 tex
     for (u32 i = 0; i < text_length; ++i) {
         // Position the text baseline 1 pixel above the bottom of the text cell, this gives nice
         // vertical alignment of text for a wide range of tested fonts.
-        mp_painter->drawText(x, y + MICROPROFILE_TEXT_HEIGHT - 2, QChar(text[i]));
+        mp_painter->drawText(x, y + MICROPROFILE_TEXT_HEIGHT - 2, QString{QLatin1Char{text[i]}});
         x += MICROPROFILE_TEXT_WIDTH + 1;
     }
 }

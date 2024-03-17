@@ -1,30 +1,14 @@
-// Copyright 2018 yuzu emulator team
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
-#include <vector>
-#include "core/hle/kernel/client_port.h"
-#include "core/hle/kernel/kernel.h"
-#include "core/hle/service/service.h"
+namespace Core {
+class System;
+}
 
-namespace Service {
-namespace LM {
+namespace Service::LM {
 
-class LM final : public ServiceFramework<LM> {
-public:
-    LM();
-    ~LM() = default;
+void LoopProcess(Core::System& system);
 
-private:
-    void Initialize(Kernel::HLERequestContext& ctx);
-
-    std::vector<Kernel::SharedPtr<Kernel::ClientPort>> registered_loggers;
-};
-
-/// Registers all LM services with the specified service manager.
-void InstallInterfaces(SM::ServiceManager& service_manager);
-
-} // namespace LM
-} // namespace Service
+} // namespace Service::LM

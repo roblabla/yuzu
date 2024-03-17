@@ -1,119 +1,116 @@
-// Copyright 2018 yuzu emulator team
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2021 yuzu Emulator Project
+// SPDX-FileCopyrightText: 2021 Skyline Team and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #pragma once
 
+#include <functional>
+#include <list>
 #include <memory>
+#include <span>
+#include <string>
 #include <unordered_map>
-#include <vector>
+
 #include "common/common_types.h"
+#include "core/hle/service/kernel_helpers.h"
+#include "core/hle/service/nvdrv/core/container.h"
+#include "core/hle/service/nvdrv/nvdata.h"
 #include "core/hle/service/service.h"
 
-namespace Service {
-namespace NVDRV {
+namespace Core {
+class System;
+}
 
-class nvdevice {
+namespace Kernel {
+class KEvent;
+}
+
+namespace Service::Nvidia {
+
+namespace NvCore {
+class Container;
+class SyncpointManager;
+} // namespace NvCore
+
+namespace Devices {
+class nvdevice;
+class nvhost_ctrl;
+} // namespace Devices
+
+class Module;
+
+class EventInterface {
 public:
-    virtual ~nvdevice() = default;
+    explicit EventInterface(Module& module_);
+    ~EventInterface();
 
-    virtual u32 ioctl(u32 command, const std::vector<u8>& input, std::vector<u8>& output) = 0;
-};
+    Kernel::KEvent* CreateEvent(std::string name);
 
-class nvmap : public nvdevice {
-public:
-    /// Returns the allocated address of an nvmap object given its handle.
-    VAddr GetObjectAddress(u32 handle) const;
-
-    u32 ioctl(u32 command, const std::vector<u8>& input, std::vector<u8>& output) override;
-private:
-    // Represents an nvmap object.
-    struct Object {
-        enum class Status { Created, Allocated };
-        u32 id;
-        u32 size;
-        u32 flags;
-        u32 align;
-        u8 kind;
-        VAddr addr;
-        Status status;
-    };
-
-    u32 next_handle = 1;
-    u32 next_id = 1;
-    std::unordered_map<u32, std::shared_ptr<Object>> handles;
-
-    enum IoctlCommands {
-        IocCreateCommand = 0xC0080101,
-        IocFromIdCommand = 0xC0080103,
-        IocAllocCommand = 0xC0200104,
-        IocParamCommand = 0xC00C0109,
-        IocGetIdCommand = 0xC008010E
-    };
-
-    struct IocCreateParams {
-        // Input
-        u32_le size;
-        // Output
-        u32_le handle;
-    };
-
-    struct IocAllocParams {
-        // Input
-        u32_le handle;
-        u32_le heap_mask;
-        u32_le flags;
-        u32_le align;
-        u8 kind;
-        INSERT_PADDING_BYTES(7);
-        u64_le addr;
-    };
-
-    struct IocGetIdParams {
-        // Output
-        u32_le id;
-        // Input
-        u32_le handle;
-    };
-
-    struct IocFromIdParams {
-        // Input
-        u32_le id;
-        // Output
-        u32_le handle;
-    };
-
-    struct IocParamParams {
-        // Input
-        u32_le handle;
-        u32_le type;
-        // Output
-        u32_le value;
-    };
-
-    u32 IocCreate(const std::vector<u8>& input, std::vector<u8>& output);
-    u32 IocAlloc(const std::vector<u8>& input, std::vector<u8>& output);
-    u32 IocGetId(const std::vector<u8>& input, std::vector<u8>& output);
-    u32 IocFromId(const std::vector<u8>& input, std::vector<u8>& output);
-    u32 IocParam(const std::vector<u8>& input, std::vector<u8>& output);
-};
-
-class nvdisp_disp0 : public nvdevice {
-public:
-    nvdisp_disp0(std::shared_ptr<nvmap> nvmap_dev) : nvdevice(), nvmap_dev(std::move(nvmap_dev)) {}
-    ~nvdisp_disp0() = default;
-
-    u32 ioctl(u32 command, const std::vector<u8>& input, std::vector<u8>& output) override;
-
-    /// Performs a screen flip, drawing the buffer pointed to by the handle.
-    void flip(u32 buffer_handle, u32 offset, u32 format, u32 width, u32 height, u32 stride);
+    void FreeEvent(Kernel::KEvent* event);
 
 private:
-    std::shared_ptr<nvmap> nvmap_dev;
+    Module& module;
+    std::mutex guard;
+    std::list<Devices::nvhost_ctrl*> on_signal;
 };
 
-/// Registers all NVDRV services with the specified service manager.
-void InstallInterfaces(SM::ServiceManager& service_manager);
+class Module final {
+public:
+    explicit Module(Core::System& system_);
+    ~Module();
 
-} // namespace NVDRV
-} // namespace Service
+    /// Returns a pointer to one of the available devices, identified by its name.
+    template <typename T>
+    std::shared_ptr<T> GetDevice(DeviceFD fd) {
+        auto itr = open_files.find(fd);
+        if (itr == open_files.end())
+            return nullptr;
+        return std::static_pointer_cast<T>(itr->second);
+    }
+
+    NvResult VerifyFD(DeviceFD fd) const;
+
+    /// Opens a device node and returns a file descriptor to it.
+    DeviceFD Open(const std::string& device_name, NvCore::SessionId session_id);
+
+    /// Sends an ioctl command to the specified file descriptor.
+    NvResult Ioctl1(DeviceFD fd, Ioctl command, std::span<const u8> input, std::span<u8> output);
+
+    NvResult Ioctl2(DeviceFD fd, Ioctl command, std::span<const u8> input,
+                    std::span<const u8> inline_input, std::span<u8> output);
+
+    NvResult Ioctl3(DeviceFD fd, Ioctl command, std::span<const u8> input, std::span<u8> output,
+                    std::span<u8> inline_output);
+
+    /// Closes a device file descriptor and returns operation success.
+    NvResult Close(DeviceFD fd);
+
+    NvResult QueryEvent(DeviceFD fd, u32 event_id, Kernel::KEvent*& event);
+
+    NvCore::Container& GetContainer() {
+        return container;
+    }
+
+private:
+    friend class EventInterface;
+
+    /// Manages syncpoints on the host
+    NvCore::Container container;
+
+    /// Id to use for the next open file descriptor.
+    DeviceFD next_fd = 1;
+
+    using FilesContainerType = std::unordered_map<DeviceFD, std::shared_ptr<Devices::nvdevice>>;
+    /// Mapping of file descriptors to the devices they reference.
+    FilesContainerType open_files;
+
+    KernelHelpers::ServiceContext service_context;
+
+    EventInterface events_interface;
+
+    std::unordered_map<std::string, std::function<FilesContainerType::iterator(DeviceFD)>> builders;
+};
+
+void LoopProcess(Core::System& system);
+
+} // namespace Service::Nvidia

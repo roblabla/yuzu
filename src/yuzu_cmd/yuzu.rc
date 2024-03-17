@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2018 yuzu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 #include "winresrc.h"
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -6,7 +9,7 @@
 
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
-CITRA_ICON              ICON                    "../../dist/yuzu.ico"
+YUZU_ICON               ICON                    "../../dist/yuzu.ico"
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -14,4 +17,4 @@ CITRA_ICON              ICON                    "../../dist/yuzu.ico"
 // RT_MANIFEST
 //
 
-1                       RT_MANIFEST             "../../dist/yuzu.manifest"
+0                       RT_MANIFEST             "../../dist/yuzu.manifest"

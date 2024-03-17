@@ -1,48 +1,24 @@
-// Copyright 2013 Dolphin Emulator Project / 2014 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2013 Dolphin Emulator Project
+// SPDX-FileCopyrightText: 2014 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <mutex>
 #include <thread>
 #include "common/common_types.h"
-
-// Support for C++11's thread_local keyword was surprisingly spotty in compilers until very
-// recently. Fortunately, thread local variables have been well supported for compilers for a while,
-// but with semantics supporting only POD types, so we can use a few defines to get some amount of
-// backwards compat support.
-// WARNING: This only works correctly with POD types.
-#if defined(__clang__)
-#if !__has_feature(cxx_thread_local)
-#define thread_local __thread
-#endif
-#elif defined(__GNUC__)
-#if __GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 8)
-#define thread_local __thread
-#endif
-#elif defined(_MSC_VER)
-#if _MSC_VER < 1900
-#define thread_local __declspec(thread)
-#endif
-#endif
+#include "common/polyfill_thread.h"
 
 namespace Common {
 
-int CurrentThreadId();
-
-void SetThreadAffinity(std::thread::native_handle_type thread, u32 mask);
-void SetCurrentThreadAffinity(u32 mask);
-
 class Event {
 public:
-    Event() : is_set(false) {}
-
     void Set() {
-        std::lock_guard<std::mutex> lk(mutex);
+        std::scoped_lock lk{mutex};
         if (!is_set) {
             is_set = true;
             condvar.notify_one();
@@ -50,69 +26,83 @@ public:
     }
 
     void Wait() {
-        std::unique_lock<std::mutex> lk(mutex);
-        condvar.wait(lk, [&] { return is_set; });
+        std::unique_lock lk{mutex};
+        condvar.wait(lk, [&] { return is_set.load(); });
         is_set = false;
+    }
+
+    bool WaitFor(const std::chrono::nanoseconds& time) {
+        std::unique_lock lk{mutex};
+        if (!condvar.wait_for(lk, time, [this] { return is_set.load(); }))
+            return false;
+        is_set = false;
+        return true;
     }
 
     template <class Clock, class Duration>
     bool WaitUntil(const std::chrono::time_point<Clock, Duration>& time) {
-        std::unique_lock<std::mutex> lk(mutex);
-        if (!condvar.wait_until(lk, time, [this] { return is_set; }))
+        std::unique_lock lk{mutex};
+        if (!condvar.wait_until(lk, time, [this] { return is_set.load(); }))
             return false;
         is_set = false;
         return true;
     }
 
     void Reset() {
-        std::unique_lock<std::mutex> lk(mutex);
+        std::unique_lock lk{mutex};
         // no other action required, since wait loops on the predicate and any lingering signal will
         // get cleared on the first iteration
         is_set = false;
     }
 
-private:
-    bool is_set;
-    std::condition_variable condvar;
-    std::mutex mutex;
-};
-
-class Barrier {
-public:
-    explicit Barrier(size_t count_) : count(count_), waiting(0), generation(0) {}
-
-    /// Blocks until all "count" threads have called Sync()
-    void Sync() {
-        std::unique_lock<std::mutex> lk(mutex);
-        const size_t current_generation = generation;
-
-        if (++waiting == count) {
-            generation++;
-            waiting = 0;
-            condvar.notify_all();
-        } else {
-            condvar.wait(lk,
-                         [this, current_generation] { return current_generation != generation; });
-        }
+    [[nodiscard]] bool IsSet() const {
+        return is_set;
     }
 
 private:
     std::condition_variable condvar;
     std::mutex mutex;
-    const size_t count;
-    size_t waiting;
-    size_t generation; // Incremented once each time the barrier is used
+    std::atomic_bool is_set{false};
 };
 
-void SleepCurrentThread(int ms);
-void SwitchCurrentThread(); // On Linux, this is equal to sleep 1ms
+class Barrier {
+public:
+    explicit Barrier(std::size_t count_) : count(count_) {}
 
-// Use this function during a spin-wait to make the current thread
-// relax while another thread is working. This may be more efficient
-// than using events because event functions use kernel calls.
-inline void YieldCPU() {
-    std::this_thread::yield();
-}
+    /// Blocks until all "count" threads have called Sync()
+    bool Sync(std::stop_token token = {}) {
+        std::unique_lock lk{mutex};
+        const std::size_t current_generation = generation;
+
+        if (++waiting == count) {
+            generation++;
+            waiting = 0;
+            condvar.notify_all();
+            return true;
+        } else {
+            CondvarWait(condvar, lk, token,
+                        [this, current_generation] { return current_generation != generation; });
+            return !token.stop_requested();
+        }
+    }
+
+private:
+    std::condition_variable_any condvar;
+    std::mutex mutex;
+    std::size_t count;
+    std::size_t waiting = 0;
+    std::size_t generation = 0; // Incremented once each time the barrier is used
+};
+
+enum class ThreadPriority : u32 {
+    Low = 0,
+    Normal = 1,
+    High = 2,
+    VeryHigh = 3,
+    Critical = 4,
+};
+
+void SetCurrentThreadPriority(ThreadPriority new_priority);
 
 void SetCurrentThreadName(const char* name);
 

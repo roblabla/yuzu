@@ -1,13 +1,11 @@
-// Copyright 2013 Dolphin Emulator Project / 2014 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2013 Dolphin Emulator Project
+// SPDX-FileCopyrightText: 2014 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
-#include <cstdarg>
 #include <cstddef>
-#include <iomanip>
-#include <sstream>
+#include <span>
 #include <string>
 #include <vector>
 #include "common/common_types.h"
@@ -15,64 +13,20 @@
 namespace Common {
 
 /// Make a string lowercase
-std::string ToLower(std::string str);
+[[nodiscard]] std::string ToLower(std::string str);
 
 /// Make a string uppercase
-std::string ToUpper(std::string str);
+[[nodiscard]] std::string ToUpper(std::string str);
 
-std::string StringFromFormat(const char* format, ...);
-// Cheap!
-bool CharArrayFromFormatV(char* out, int outsize, const char* format, va_list args);
+[[nodiscard]] std::string StringFromBuffer(std::span<const u8> data);
+[[nodiscard]] std::string StringFromBuffer(std::span<const char> data);
 
-template <size_t Count>
-inline void CharArrayFromFormat(char (&out)[Count], const char* format, ...) {
-    va_list args;
-    va_start(args, format);
-    CharArrayFromFormatV(out, Count, format, args);
-    va_end(args);
-}
+[[nodiscard]] std::string StripSpaces(const std::string& s);
+[[nodiscard]] std::string StripQuotes(const std::string& s);
 
-// Good
-std::string ArrayToString(const u8* data, size_t size, int line_len = 20, bool spaces = true);
+[[nodiscard]] std::string StringFromBool(bool value);
 
-std::string StripSpaces(const std::string& s);
-std::string StripQuotes(const std::string& s);
-
-// Thousand separator. Turns 12345678 into 12,345,678
-template <typename I>
-std::string ThousandSeparate(I value, int spaces = 0) {
-    std::ostringstream oss;
-
-// std::locale("") seems to be broken on many platforms
-#if defined _WIN32 || (defined __linux__ && !defined __clang__)
-    oss.imbue(std::locale(""));
-#endif
-    oss << std::setw(spaces) << value;
-
-    return oss.str();
-}
-
-std::string StringFromBool(bool value);
-
-bool TryParse(const std::string& str, bool* output);
-bool TryParse(const std::string& str, u32* output);
-
-template <typename N>
-static bool TryParse(const std::string& str, N* const output) {
-    std::istringstream iss(str);
-
-    N tmp = 0;
-    if (iss >> tmp) {
-        *output = tmp;
-        return true;
-    } else
-        return false;
-}
-
-// TODO: kill this
-bool AsciiToHex(const char* _szValue, u32& result);
-
-std::string TabsToSpaces(int tab_size, const std::string& in);
+[[nodiscard]] std::string TabsToSpaces(int tab_size, std::string in);
 
 void SplitString(const std::string& str, char delim, std::vector<std::string>& output);
 
@@ -80,46 +34,27 @@ void SplitString(const std::string& str, char delim, std::vector<std::string>& o
 bool SplitPath(const std::string& full_path, std::string* _pPath, std::string* _pFilename,
                std::string* _pExtension);
 
-void BuildCompleteFilename(std::string& _CompleteFilename, const std::string& _Path,
-                           const std::string& _Filename);
-std::string ReplaceAll(std::string result, const std::string& src, const std::string& dest);
+[[nodiscard]] std::string ReplaceAll(std::string result, const std::string& src,
+                                     const std::string& dest);
 
-std::string UTF16ToUTF8(const std::u16string& input);
-std::u16string UTF8ToUTF16(const std::string& input);
-
-std::string CP1252ToUTF8(const std::string& str);
-std::string SHIFTJISToUTF8(const std::string& str);
+[[nodiscard]] std::string UTF16ToUTF8(std::u16string_view input);
+[[nodiscard]] std::u16string UTF8ToUTF16(std::string_view input);
+[[nodiscard]] std::u32string UTF8ToUTF32(std::string_view input);
 
 #ifdef _WIN32
-std::string UTF16ToUTF8(const std::wstring& input);
-std::wstring UTF8ToUTF16W(const std::string& str);
-
-#ifdef _UNICODE
-inline std::string TStrToUTF8(const std::wstring& str) {
-    return UTF16ToUTF8(str);
-}
-
-inline std::wstring UTF8ToTStr(const std::string& str) {
-    return UTF8ToUTF16W(str);
-}
-#else
-inline std::string TStrToUTF8(const std::string& str) {
-    return str;
-}
-
-inline std::string UTF8ToTStr(const std::string& str) {
-    return str;
-}
-#endif
+[[nodiscard]] std::string UTF16ToUTF8(std::wstring_view input);
+[[nodiscard]] std::wstring UTF8ToUTF16W(std::string_view str);
 
 #endif
+
+[[nodiscard]] std::u16string U16StringFromBuffer(const u16* input, std::size_t length);
 
 /**
  * Compares the string defined by the range [`begin`, `end`) to the null-terminated C-string
  * `other` for equality.
  */
 template <typename InIt>
-bool ComparePartialString(InIt begin, InIt end, const char* other) {
+[[nodiscard]] bool ComparePartialString(InIt begin, InIt end, const char* other) {
     for (; begin != end && *other != '\0'; ++begin, ++other) {
         if (*begin != *other) {
             return false;
@@ -133,5 +68,15 @@ bool ComparePartialString(InIt begin, InIt end, const char* other) {
  * Creates a std::string from a fixed-size NUL-terminated char buffer. If the buffer isn't
  * NUL-terminated then the string ends at max_len characters.
  */
-std::string StringFromFixedZeroTerminatedBuffer(const char* buffer, size_t max_len);
-}
+[[nodiscard]] std::string StringFromFixedZeroTerminatedBuffer(std::string_view buffer,
+                                                              std::size_t max_len);
+
+/**
+ * Creates a UTF-16 std::u16string from a fixed-size NUL-terminated char buffer. If the buffer isn't
+ * null-terminated, then the string ends at the greatest multiple of two less then or equal to
+ * max_len_bytes.
+ */
+[[nodiscard]] std::u16string UTF16StringFromFixedZeroTerminatedBuffer(std::u16string_view buffer,
+                                                                      std::size_t max_len);
+
+} // namespace Common

@@ -1,16 +1,14 @@
-// Copyright 2018 yuzu emulator team
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
-#include "core/hle/service/service.h"
+namespace Core {
+class System;
+}
 
-namespace Service {
-namespace AM {
+namespace Service::AM {
 
-/// Registers all AM services with the specified service manager.
-void InstallInterfaces(SM::ServiceManager& service_manager);
+void LoopProcess(Core::System& system);
 
-} // namespace AM
-} // namespace Service
+} // namespace Service::AM

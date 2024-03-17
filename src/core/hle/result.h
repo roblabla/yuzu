@@ -1,25 +1,15 @@
-// Copyright 2014 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2014 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
-#include <new>
-#include <utility>
 #include "common/assert.h"
 #include "common/bit_field.h"
 #include "common/common_funcs.h"
 #include "common/common_types.h"
+#include "common/expected.h"
 
 // All the constants in this file come from http://switchbrew.org/index.php?title=Error_codes
-
-/**
- * Detailed description of the error. Code 0 always means success.
- */
-enum class ErrorDescription : u32 {
-    Success = 0,
-    RemoteProcessDead = 301,
-};
 
 /**
  * Identifies the module which caused the error. Error codes can be propagated through a call
@@ -30,297 +20,447 @@ enum class ErrorModule : u32 {
     Common = 0,
     Kernel = 1,
     FS = 2,
-    NvidiaTransferMemory = 3,
+    OS = 3, // used for Memory, Thread, Mutex, Nvidia
+    HTCS = 4,
     NCM = 5,
     DD = 6,
     LR = 8,
     Loader = 9,
     CMIF = 10,
     HIPC = 11,
+    TMA = 12,
+    DMNT = 13,
+    GDS = 14,
     PM = 15,
     NS = 16,
+    BSDSockets = 17,
     HTC = 18,
+    TSC = 19,
+    NCMContent = 20,
     SM = 21,
     RO = 22,
+    GC = 23,
     SDMMC = 24,
+    OVLN = 25,
     SPL = 26,
+    Socket = 27,
+    HTCLOW = 29,
+    DDSF = 30,
+    HTCFS = 31,
+    Async = 32,
+    Util = 33,
+    TIPC = 35,
+    ANIF = 37,
     ETHC = 100,
     I2C = 101,
+    GPIO = 102,
+    UART = 103,
+    CPAD = 104,
     Settings = 105,
+    FTM = 106,
+    WLAN = 107,
+    XCD = 108,
+    TMP451 = 109,
     NIFM = 110,
-    Display = 114,
-    NTC = 116,
+    HwOpus = 111,
+    LSM6DS3 = 112,
+    Bluetooth = 113,
+    VI = 114,
+    NFP = 115,
+    Time = 116,
     FGM = 117,
-    PCIE = 120,
+    OE = 118,
+    BH1730FVC = 119,
+    PCIe = 120,
     Friends = 121,
-    SSL = 123,
+    BCAT = 122,
+    SSLSrv = 123,
     Account = 124,
+    News = 125,
     Mii = 126,
+    NFC = 127,
     AM = 128,
     PlayReport = 129,
+    AHID = 130,
+    Qlaunch = 132,
     PCV = 133,
-    OMM = 134,
+    USBPD = 134,
+    BPC = 135,
+    PSM = 136,
     NIM = 137,
     PSC = 138,
+    TC = 139,
     USB = 140,
+    NSD = 141,
+    PCTL = 142,
     BTM = 143,
+    LA = 144,
+    ETicket = 145,
+    NGC = 146,
     ERPT = 147,
     APM = 148,
+    CEC = 149,
+    Profiler = 150,
+    ErrorUpload = 151,
+    LIDBE = 152,
+    Audio = 153,
     NPNS = 154,
+    NPNSHTTPSTREAM = 155,
     ARP = 157,
-    BOOT = 158,
-    NFC = 161,
+    SWKBD = 158,
+    BOOT = 159,
+    NetDiag = 160,
+    NFCMifare = 161,
     UserlandAssert = 162,
+    Fatal = 163,
+    NIMShop = 164,
+    SPSM = 165,
+    BGTC = 167,
     UserlandCrash = 168,
-    HID = 203,
+    SASBUS = 169,
+    PI = 170,
+    AudioCtrl = 172,
+    LBL = 173,
+    JIT = 175,
+    HDCP = 176,
+    OMM = 177,
+    PDM = 178,
+    OLSC = 179,
+    SREPO = 180,
+    Dauth = 181,
+    STDFU = 182,
+    DBG = 183,
+    DHCPS = 186,
+    SPI = 187,
+    AVM = 188,
+    PWM = 189,
+    RTC = 191,
+    Regulator = 192,
+    LED = 193,
+    SIO = 195,
+    PCM = 196,
+    CLKRST = 197,
+    POWCTL = 198,
+    AudioOld = 201,
+    HID = 202,
+    LDN = 203,
+    CS = 204,
+    Irsensor = 205,
     Capture = 206,
-    TC = 651,
+    Manu = 208,
+    ATK = 209,
+    WEB = 210,
+    LCS = 211,
+    GRC = 212,
+    Repair = 213,
+    Album = 214,
+    RID = 215,
+    Migration = 216,
+    MigrationLdcServ = 217,
+    HIDBUS = 218,
+    ENS = 219,
+    WebSocket = 223,
+    DCDMTP = 227,
+    PGL = 228,
+    Notification = 229,
+    INS = 230,
+    LP2P = 231,
+    RCD = 232,
+    LCM40607 = 233,
+    PRC = 235,
+    TMAHTC = 237,
+    ECTX = 238,
+    MNPP = 239,
+    HSHL = 240,
+    CAPMTP = 242,
+    DP2HDMI = 244,
+    Cradle = 245,
+    SProfile = 246,
+    NDRM = 250,
+    TSPM = 499,
+    DevMenu = 500,
     GeneralWebApplet = 800,
     WifiWebAuthApplet = 809,
     WhitelistedApplet = 810,
     ShopN = 811,
 };
 
-/// Encapsulates a CTR-OS error code, allowing it to be separated into its constituent fields.
-union ResultCode {
+/// Encapsulates a Horizon OS error code, allowing it to be separated into its constituent fields.
+union Result {
     u32 raw;
 
-    BitField<0, 9, ErrorModule> module;
-    BitField<9, 13, u32> description;
+    using Module = BitField<0, 9, ErrorModule>;
+    using Description = BitField<9, 13, u32>;
 
-    // The last bit of `level` is checked by apps and the kernel to determine if a result code is an
-    // error
-    BitField<31, 1, u32> is_error;
+    Result() = default;
+    constexpr explicit Result(u32 raw_) : raw(raw_) {}
 
-    constexpr explicit ResultCode(u32 raw) : raw(raw) {}
+    constexpr Result(ErrorModule module_, u32 description_)
+        : raw(Module::FormatValue(module_) | Description::FormatValue(description_)) {}
 
-    constexpr ResultCode(ErrorModule module, ErrorDescription description)
-        : ResultCode(module, static_cast<u32>(description)) {}
-
-    constexpr ResultCode(ErrorModule module_, u32 description_)
-        : raw(module.FormatValue(module_) | description.FormatValue(description_)) {}
-
-    constexpr ResultCode& operator=(const ResultCode& o) {
-        raw = o.raw;
-        return *this;
+    [[nodiscard]] constexpr bool IsSuccess() const {
+        return raw == 0;
     }
 
-    constexpr bool IsSuccess() const {
-        return is_error.ExtractValue(raw) == 0;
+    [[nodiscard]] constexpr bool IsError() const {
+        return !IsSuccess();
     }
 
-    constexpr bool IsError() const {
-        return is_error.ExtractValue(raw) == 1;
+    [[nodiscard]] constexpr bool IsFailure() const {
+        return !IsSuccess();
+    }
+
+    [[nodiscard]] constexpr u32 GetInnerValue() const {
+        return raw;
+    }
+
+    [[nodiscard]] constexpr ErrorModule GetModule() const {
+        return Module::ExtractValue(raw);
+    }
+
+    [[nodiscard]] constexpr u32 GetDescription() const {
+        return Description::ExtractValue(raw);
+    }
+
+    [[nodiscard]] constexpr bool Includes(Result result) const {
+        return GetInnerValue() == result.GetInnerValue();
     }
 };
+static_assert(std::is_trivial_v<Result>);
 
-constexpr bool operator==(const ResultCode& a, const ResultCode& b) {
+[[nodiscard]] constexpr bool operator==(const Result& a, const Result& b) {
     return a.raw == b.raw;
 }
 
-constexpr bool operator!=(const ResultCode& a, const ResultCode& b) {
-    return a.raw != b.raw;
+[[nodiscard]] constexpr bool operator!=(const Result& a, const Result& b) {
+    return !operator==(a, b);
 }
 
 // Convenience functions for creating some common kinds of errors:
 
-/// The default success `ResultCode`.
-constexpr ResultCode RESULT_SUCCESS(0);
+/// The default success `Result`.
+constexpr Result ResultSuccess(0);
 
 /**
- * This is an optional value type. It holds a `ResultCode` and, if that code is a success code,
- * also holds a result of type `T`. If the code is an error code then trying to access the inner
- * value fails, thus ensuring that the ResultCode of functions is always checked properly before
- * their return value is used.  It is similar in concept to the `std::optional` type
- * (http://en.cppreference.com/w/cpp/experimental/optional) originally proposed for inclusion in
- * C++14, or the `Result` type in Rust (http://doc.rust-lang.org/std/result/index.html).
+ * Placeholder result code used for unknown error codes.
+ *
+ * @note This should only be used when a particular error code
+ *       is not known yet.
+ */
+constexpr Result ResultUnknown(UINT32_MAX);
+
+/**
+ * A ResultRange defines an inclusive range of error descriptions within an error module.
+ * This can be used to check whether the description of a given Result falls within the range.
+ * The conversion function returns a Result with its description set to description_start.
  *
  * An example of how it could be used:
  * \code
- * ResultVal<int> Frobnicate(float strength) {
- *     if (strength < 0.f || strength > 1.0f) {
- *         // Can't frobnicate too weakly or too strongly
- *         return ResultCode(ErrorDescription::OutOfRange, ErrorModule::Common,
- *             ErrorSummary::InvalidArgument, ErrorLevel::Permanent);
- *     } else {
- *         // Frobnicated! Give caller a cookie
- *         return MakeResult<int>(42);
- *     }
- * }
- * \endcode
+ * constexpr ResultRange ResultCommonError{ErrorModule::Common, 0, 9999};
  *
- * \code
- * ResultVal<int> frob_result = Frobnicate(0.75f);
- * if (frob_result) {
- *     // Frobbed ok
- *     printf("My cookie is %d\n", *frob_result);
- * } else {
- *     printf("Guess I overdid it. :( Error code: %ux\n", frob_result.code().hex);
+ * Result Example(int value) {
+ *     const Result result = OtherExample(value);
+ *
+ *     // This will only evaluate to true if result.module is ErrorModule::Common and
+ *     // result.description is in between 0 and 9999 inclusive.
+ *     if (ResultCommonError.Includes(result)) {
+ *         // This returns Result{ErrorModule::Common, 0};
+ *         return ResultCommonError;
+ *     }
+ *
+ *     return ResultSuccess;
  * }
  * \endcode
  */
-template <typename T>
-class ResultVal {
+class ResultRange {
 public:
-    /// Constructs an empty `ResultVal` with the given error code. The code must not be a success
-    /// code.
-    ResultVal(ResultCode error_code = ResultCode(-1)) : result_code(error_code) {
-        ASSERT(error_code.IsError());
+    consteval ResultRange(ErrorModule module, u32 description_start, u32 description_end_)
+        : code{module, description_start}, description_end{description_end_} {}
+
+    [[nodiscard]] constexpr operator Result() const {
+        return code;
     }
 
-    /**
-     * Similar to the non-member function `MakeResult`, with the exception that you can manually
-     * specify the success code. `success_code` must not be an error code.
-     */
-    template <typename... Args>
-    static ResultVal WithCode(ResultCode success_code, Args&&... args) {
-        ResultVal<T> result;
-        result.emplace(success_code, std::forward<Args>(args)...);
-        return result;
-    }
-
-    ResultVal(const ResultVal& o) : result_code(o.result_code) {
-        if (!o.empty()) {
-            new (&object) T(o.object);
-        }
-    }
-
-    ResultVal(ResultVal&& o) : result_code(o.result_code) {
-        if (!o.empty()) {
-            new (&object) T(std::move(o.object));
-        }
-    }
-
-    ~ResultVal() {
-        if (!empty()) {
-            object.~T();
-        }
-    }
-
-    ResultVal& operator=(const ResultVal& o) {
-        if (!empty()) {
-            if (!o.empty()) {
-                object = o.object;
-            } else {
-                object.~T();
-            }
-        } else {
-            if (!o.empty()) {
-                new (&object) T(o.object);
-            }
-        }
-        result_code = o.result_code;
-
-        return *this;
-    }
-
-    /**
-     * Replaces the current result with a new constructed result value in-place. The code must not
-     * be an error code.
-     */
-    template <typename... Args>
-    void emplace(ResultCode success_code, Args&&... args) {
-        ASSERT(success_code.IsSuccess());
-        if (!empty()) {
-            object.~T();
-        }
-        new (&object) T(std::forward<Args>(args)...);
-        result_code = success_code;
-    }
-
-    /// Returns true if the `ResultVal` contains an error code and no value.
-    bool empty() const {
-        return result_code.IsError();
-    }
-
-    /// Returns true if the `ResultVal` contains a return value.
-    bool Succeeded() const {
-        return result_code.IsSuccess();
-    }
-    /// Returns true if the `ResultVal` contains an error code and no value.
-    bool Failed() const {
-        return empty();
-    }
-
-    ResultCode Code() const {
-        return result_code;
-    }
-
-    const T& operator*() const {
-        return object;
-    }
-    T& operator*() {
-        return object;
-    }
-    const T* operator->() const {
-        return &object;
-    }
-    T* operator->() {
-        return &object;
-    }
-
-    /// Returns the value contained in this `ResultVal`, or the supplied default if it is missing.
-    template <typename U>
-    T ValueOr(U&& value) const {
-        return !empty() ? object : std::move(value);
-    }
-
-    /// Asserts that the result succeeded and returns a reference to it.
-    T& Unwrap() & {
-        ASSERT_MSG(Succeeded(), "Tried to Unwrap empty ResultVal");
-        return **this;
-    }
-
-    T&& Unwrap() && {
-        ASSERT_MSG(Succeeded(), "Tried to Unwrap empty ResultVal");
-        return std::move(**this);
+    [[nodiscard]] constexpr bool Includes(Result other) const {
+        return code.GetModule() == other.GetModule() &&
+               code.GetDescription() <= other.GetDescription() &&
+               other.GetDescription() <= description_end;
     }
 
 private:
-    // A union is used to allocate the storage for the value, while allowing us to construct and
-    // destruct it at will.
-    union {
-        T object;
-    };
-    ResultCode result_code;
+    Result code;
+    u32 description_end;
 };
 
-/**
- * This function is a helper used to construct `ResultVal`s. It receives the arguments to construct
- * `T` with and creates a success `ResultVal` contained the constructed value.
- */
-template <typename T, typename... Args>
-ResultVal<T> MakeResult(Args&&... args) {
-    return ResultVal<T>::WithCode(RESULT_SUCCESS, std::forward<Args>(args)...);
+#define R_SUCCEEDED(res) (static_cast<Result>(res).IsSuccess())
+#define R_FAILED(res) (static_cast<Result>(res).IsFailure())
+
+namespace ResultImpl {
+template <auto EvaluateResult, class F>
+class ScopedResultGuard {
+    YUZU_NON_COPYABLE(ScopedResultGuard);
+    YUZU_NON_MOVEABLE(ScopedResultGuard);
+
+private:
+    Result& m_ref;
+    F m_f;
+
+public:
+    constexpr ScopedResultGuard(Result& ref, F f) : m_ref(ref), m_f(std::move(f)) {}
+    constexpr ~ScopedResultGuard() {
+        if (EvaluateResult(m_ref)) {
+            m_f();
+        }
+    }
+};
+
+template <auto EvaluateResult>
+class ResultReferenceForScopedResultGuard {
+private:
+    Result& m_ref;
+
+public:
+    constexpr ResultReferenceForScopedResultGuard(Result& r) : m_ref(r) {}
+    constexpr operator Result&() const {
+        return m_ref;
+    }
+};
+
+template <auto EvaluateResult, typename F>
+constexpr ScopedResultGuard<EvaluateResult, F> operator+(
+    ResultReferenceForScopedResultGuard<EvaluateResult> ref, F&& f) {
+    return ScopedResultGuard<EvaluateResult, F>(static_cast<Result&>(ref), std::forward<F>(f));
 }
 
-/**
- * Deducible overload of MakeResult, allowing the template parameter to be ommited if you're just
- * copy or move constructing.
- */
-template <typename Arg>
-ResultVal<std::remove_reference_t<Arg>> MakeResult(Arg&& arg) {
-    return ResultVal<std::remove_reference_t<Arg>>::WithCode(RESULT_SUCCESS,
-                                                             std::forward<Arg>(arg));
+constexpr bool EvaluateResultSuccess(const Result& r) {
+    return R_SUCCEEDED(r);
+}
+constexpr bool EvaluateResultFailure(const Result& r) {
+    return R_FAILED(r);
 }
 
-/**
- * Check for the success of `source` (which must evaluate to a ResultVal). If it succeeds, unwraps
- * the contained value and assigns it to `target`, which can be either an l-value expression or a
- * variable declaration. If it fails the return code is returned from the current function. Thus it
- * can be used to cascade errors out, achieving something akin to exception handling.
- */
-#define CASCADE_RESULT(target, source)                                                             \
-    auto CONCAT2(check_result_L, __LINE__) = source;                                               \
-    if (CONCAT2(check_result_L, __LINE__).Failed())                                                \
-        return CONCAT2(check_result_L, __LINE__).Code();                                           \
-    target = std::move(*CONCAT2(check_result_L, __LINE__))
+template <auto... R>
+constexpr bool EvaluateAnyResultIncludes(const Result& r) {
+    return ((r == R) || ...);
+}
 
-/**
- * Analogous to CASCADE_RESULT, but for a bare ResultCode. The code will be propagated if
- * non-success, or discarded otherwise.
- */
-#define CASCADE_CODE(source)                                                                       \
-    auto CONCAT2(check_result_L, __LINE__) = source;                                               \
-    if (CONCAT2(check_result_L, __LINE__).IsError())                                               \
-        return CONCAT2(check_result_L, __LINE__);
+template <auto... R>
+constexpr bool EvaluateResultNotIncluded(const Result& r) {
+    return !EvaluateAnyResultIncludes<R...>(r);
+}
+
+template <typename T>
+constexpr void UpdateCurrentResultReference(T result_reference, Result result) = delete;
+// Intentionally not defined
+
+template <>
+constexpr void UpdateCurrentResultReference<Result&>(Result& result_reference, Result result) {
+    result_reference = result;
+}
+
+template <>
+constexpr void UpdateCurrentResultReference<const Result>(Result result_reference, Result result) {}
+} // namespace ResultImpl
+
+#define DECLARE_CURRENT_RESULT_REFERENCE_AND_STORAGE(COUNTER_VALUE)                                \
+    [[maybe_unused]] constexpr bool CONCAT2(HasPrevRef_, COUNTER_VALUE) =                          \
+        std::same_as<decltype(__TmpCurrentResultReference), Result&>;                              \
+    [[maybe_unused]] Result CONCAT2(PrevRef_, COUNTER_VALUE) = __TmpCurrentResultReference;        \
+    [[maybe_unused]] Result CONCAT2(__tmp_result_, COUNTER_VALUE) = ResultSuccess;                 \
+    Result& __TmpCurrentResultReference = CONCAT2(HasPrevRef_, COUNTER_VALUE)                      \
+                                              ? CONCAT2(PrevRef_, COUNTER_VALUE)                   \
+                                              : CONCAT2(__tmp_result_, COUNTER_VALUE)
+
+#define ON_RESULT_RETURN_IMPL(...)                                                                 \
+    static_assert(std::same_as<decltype(__TmpCurrentResultReference), Result&>);                   \
+    auto CONCAT2(RESULT_GUARD_STATE_, __COUNTER__) =                                               \
+        ResultImpl::ResultReferenceForScopedResultGuard<__VA_ARGS__>(                              \
+            __TmpCurrentResultReference) +                                                         \
+        [&]()
+
+#define ON_RESULT_FAILURE_2 ON_RESULT_RETURN_IMPL(ResultImpl::EvaluateResultFailure)
+
+#define ON_RESULT_FAILURE                                                                          \
+    DECLARE_CURRENT_RESULT_REFERENCE_AND_STORAGE(__COUNTER__);                                     \
+    ON_RESULT_FAILURE_2
+
+#define ON_RESULT_SUCCESS_2 ON_RESULT_RETURN_IMPL(ResultImpl::EvaluateResultSuccess)
+
+#define ON_RESULT_SUCCESS                                                                          \
+    DECLARE_CURRENT_RESULT_REFERENCE_AND_STORAGE(__COUNTER__);                                     \
+    ON_RESULT_SUCCESS_2
+
+#define ON_RESULT_INCLUDED_2(...)                                                                  \
+    ON_RESULT_RETURN_IMPL(ResultImpl::EvaluateAnyResultIncludes<__VA_ARGS__>)
+
+#define ON_RESULT_INCLUDED(...)                                                                    \
+    DECLARE_CURRENT_RESULT_REFERENCE_AND_STORAGE(__COUNTER__);                                     \
+    ON_RESULT_INCLUDED_2(__VA_ARGS__)
+
+constexpr inline Result __TmpCurrentResultReference = ResultSuccess;
+
+/// Returns a result.
+#define R_RETURN(res_expr)                                                                         \
+    {                                                                                              \
+        const Result _tmp_r_throw_rc = (res_expr);                                                 \
+        ResultImpl::UpdateCurrentResultReference<decltype(__TmpCurrentResultReference)>(           \
+            __TmpCurrentResultReference, _tmp_r_throw_rc);                                         \
+        return _tmp_r_throw_rc;                                                                    \
+    }
+
+/// Returns ResultSuccess()
+#define R_SUCCEED() R_RETURN(ResultSuccess)
+
+/// Throws a result.
+#define R_THROW(res_expr) R_RETURN(res_expr)
+
+/// Evaluates a boolean expression, and returns a result unless that expression is true.
+#define R_UNLESS(expr, res)                                                                        \
+    {                                                                                              \
+        if (!(expr)) {                                                                             \
+            R_THROW(res);                                                                          \
+        }                                                                                          \
+    }
+
+/// Evaluates an expression that returns a result, and returns the result if it would fail.
+#define R_TRY(res_expr)                                                                            \
+    {                                                                                              \
+        const auto _tmp_r_try_rc = (res_expr);                                                     \
+        if (R_FAILED(_tmp_r_try_rc)) {                                                             \
+            R_THROW(_tmp_r_try_rc);                                                                \
+        }                                                                                          \
+    }
+
+/// Evaluates a boolean expression, and succeeds if that expression is true.
+#define R_SUCCEED_IF(expr) R_UNLESS(!(expr), ResultSuccess)
+
+#define R_TRY_CATCH(res_expr)                                                                      \
+    {                                                                                              \
+        const auto R_CURRENT_RESULT = (res_expr);                                                  \
+        if (R_FAILED(R_CURRENT_RESULT)) {                                                          \
+            if (false)
+
+#define R_END_TRY_CATCH                                                                            \
+    else if (R_FAILED(R_CURRENT_RESULT)) {                                                         \
+        R_THROW(R_CURRENT_RESULT);                                                                 \
+    }                                                                                              \
+    }                                                                                              \
+    }
+
+#define R_CATCH_ALL()                                                                              \
+    }                                                                                              \
+    else if (R_FAILED(R_CURRENT_RESULT)) {                                                         \
+        if (true)
+
+#define R_CATCH(res_expr)                                                                          \
+    }                                                                                              \
+    else if ((res_expr) == (R_CURRENT_RESULT)) {                                                   \
+        if (true)
+
+#define R_CONVERT(catch_type, convert_type)                                                        \
+    R_CATCH(catch_type) { R_THROW(static_cast<Result>(convert_type)); }
+
+#define R_CONVERT_ALL(convert_type)                                                                \
+    R_CATCH_ALL() { R_THROW(static_cast<Result>(convert_type)); }
+
+#define R_ASSERT(res_expr) ASSERT(R_SUCCEEDED(res_expr))

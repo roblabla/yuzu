@@ -1,14 +1,28 @@
-// Copyright 2014 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2014 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
 #include <memory>
-#include <tuple>
 #include <utility>
+
 #include "common/common_types.h"
 #include "core/frontend/framebuffer_layout.h"
+
+namespace Core::Frontend {
+
+class GraphicsContext;
+
+/// Information for the Graphics Backends signifying what type of screen pointer is in
+/// WindowInformation
+enum class WindowSystemType {
+    Headless,
+    Windows,
+    X11,
+    Wayland,
+    Cocoa,
+    Android,
+};
 
 /**
  * Abstraction class used to provide an interface between emulation code and the frontend
@@ -32,40 +46,39 @@ class EmuWindow {
 public:
     /// Data structure to store emuwindow configuration
     struct WindowConfig {
-        bool fullscreen;
-        int res_width;
-        int res_height;
-        std::pair<unsigned, unsigned> min_client_area_size;
+        bool fullscreen = false;
+        int res_width = 0;
+        int res_height = 0;
+        std::pair<u32, u32> min_client_area_size;
     };
 
-    /// Swap buffers to display the next frame
-    virtual void SwapBuffers() = 0;
+    /// Data describing host window system information
+    struct WindowSystemInfo {
+        // Window system type. Determines which GL context or Vulkan WSI is used.
+        WindowSystemType type = WindowSystemType::Headless;
 
-    /// Polls window events
-    virtual void PollEvents() = 0;
+        // Connection to a display server. This is used on X11 and Wayland platforms.
+        void* display_connection = nullptr;
 
-    /// Makes the graphics context current for the caller thread
-    virtual void MakeCurrent() = 0;
+        // Render surface. This is a pointer to the native window handle, which depends
+        // on the platform. e.g. HWND for Windows, Window for X11. If the surface is
+        // set to nullptr, the video backend will run in headless mode.
+        void* render_surface = nullptr;
 
-    /// Releases (dunno if this is the "right" word) the GLFW context from the caller thread
-    virtual void DoneCurrent() = 0;
+        // Scale of the render surface. For hidpi systems, this will be >1.
+        float render_surface_scale = 1.0f;
+    };
 
-    /**
-     * Signal that a touch pressed event has occurred (e.g. mouse click pressed)
-     * @param framebuffer_x Framebuffer x-coordinate that was pressed
-     * @param framebuffer_y Framebuffer y-coordinate that was pressed
-     */
-    void TouchPressed(unsigned framebuffer_x, unsigned framebuffer_y);
-
-    /// Signal that a touch released event has occurred (e.g. mouse click released)
-    void TouchReleased();
+    /// Called from GPU thread when a frame is displayed.
+    virtual void OnFrameDisplayed() {}
 
     /**
-     * Signal that a touch movement event has occurred (e.g. mouse was moved over the emu window)
-     * @param framebuffer_x Framebuffer x-coordinate
-     * @param framebuffer_y Framebuffer y-coordinate
+     * Returns a GraphicsContext that the frontend provides to be used for rendering.
      */
-    void TouchMoved(unsigned framebuffer_x, unsigned framebuffer_y);
+    virtual std::unique_ptr<GraphicsContext> CreateSharedContext() const = 0;
+
+    /// Returns if window is shown (not minimized)
+    virtual bool IsShown() const = 0;
 
     /**
      * Returns currently active configuration.
@@ -76,6 +89,10 @@ public:
         return active_config;
     }
 
+    bool StrictContextRequired() const {
+        return strict_context_required;
+    }
+
     /**
      * Requests the internal configuration to be replaced by the specified argument at some point in
      * the future.
@@ -84,6 +101,13 @@ public:
      */
     void SetConfig(const WindowConfig& val) {
         config = val;
+    }
+
+    /**
+     * Returns system information about the drawing area.
+     */
+    const WindowSystemInfo& GetWindowInfo() const {
+        return window_info;
     }
 
     /**
@@ -98,10 +122,10 @@ public:
      * Convenience method to update the current frame layout
      * Read from the current settings to determine which layout to use.
      */
-    void UpdateCurrentFramebufferLayout(unsigned width, unsigned height);
+    void UpdateCurrentFramebufferLayout(u32 width, u32 height);
 
 protected:
-    EmuWindow();
+    explicit EmuWindow();
     virtual ~EmuWindow();
 
     /**
@@ -133,10 +157,24 @@ protected:
      * Update internal client area size with the given parameter.
      * @note EmuWindow implementations will usually use this in window resize event handlers.
      */
-    void NotifyClientAreaSizeChanged(const std::pair<unsigned, unsigned>& size) {
+    void NotifyClientAreaSizeChanged(std::pair<u32, u32> size) {
         client_area_width = size.first;
         client_area_height = size.second;
     }
+
+    /**
+     * Converts a screen position into the equivalent touchscreen position.
+     */
+    std::pair<f32, f32> MapToTouchScreen(u32 framebuffer_x, u32 framebuffer_y) const;
+
+    /**
+     * Clip the provided coordinates to be inside the touchscreen area.
+     */
+    std::pair<u32, u32> ClipToTouchScreen(u32 new_x, u32 new_y) const;
+
+    WindowSystemInfo window_info;
+
+    bool strict_context_required = false;
 
 private:
     /**
@@ -144,25 +182,18 @@ private:
      * For the request to be honored, EmuWindow implementations will usually reimplement this
      * function.
      */
-    virtual void OnMinimalClientAreaChangeRequest(
-        const std::pair<unsigned, unsigned>& minimal_size) {
+    virtual void OnMinimalClientAreaChangeRequest(std::pair<u32, u32>) {
         // By default, ignore this request and do nothing.
     }
 
     Layout::FramebufferLayout framebuffer_layout; ///< Current framebuffer layout
 
-    unsigned client_area_width;  ///< Current client width, should be set by window impl.
-    unsigned client_area_height; ///< Current client height, should be set by window impl.
+    u32 client_area_width;  ///< Current client width, should be set by window impl.
+    u32 client_area_height; ///< Current client height, should be set by window impl.
 
     WindowConfig config;        ///< Internal configuration (changes pending for being applied in
                                 /// ProcessConfigurationChanges)
     WindowConfig active_config; ///< Internal active configuration
-
-    class TouchState;
-    std::shared_ptr<TouchState> touch_state;
-
-    /**
-     * Clip the provided coordinates to be inside the touchscreen area.
-     */
-    std::tuple<unsigned, unsigned> ClipToTouchScreen(unsigned new_x, unsigned new_y);
 };
+
+} // namespace Core::Frontend

@@ -1,189 +1,192 @@
-// Copyright 2008 Dolphin Emulator Project / 2017 Citra Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
+
+#include <atomic>
+#include <chrono>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <thread>
+
+#include <boost/heap/fibonacci_heap.hpp>
+
+#include "common/common_types.h"
+#include "common/thread.h"
+#include "common/wall_clock.h"
+
+namespace Core::Timing {
+
+/// A callback that may be scheduled for a particular core timing event.
+using TimedCallback = std::function<std::optional<std::chrono::nanoseconds>(
+    s64 time, std::chrono::nanoseconds ns_late)>;
+
+/// Contains the characteristics of a particular event.
+struct EventType {
+    explicit EventType(TimedCallback&& callback_, std::string&& name_)
+        : callback{std::move(callback_)}, name{std::move(name_)}, sequence_number{0} {}
+
+    /// The event's callback function.
+    TimedCallback callback;
+    /// A pointer to the name of the event.
+    const std::string name;
+    /// A monotonic sequence number, incremented when this event is
+    /// changed externally.
+    size_t sequence_number;
+};
+
+enum class UnscheduleEventType {
+    Wait,
+    NoWait,
+};
 
 /**
  * This is a system to schedule events into the emulated machine's future. Time is measured
  * in main CPU clock cycles.
  *
  * To schedule an event, you first have to register its type. This is where you pass in the
- * callback. You then schedule events using the type id you get back.
+ * callback. You then schedule events using the type ID you get back.
  *
- * The int cyclesLate that the callbacks get is how many cycles late it was.
+ * The s64 ns_late that the callbacks get is how many ns late it was.
  * So to schedule a new event on a regular basis:
  * inside callback:
- *   ScheduleEvent(periodInCycles - cyclesLate, callback, "whatever")
+ *   ScheduleEvent(period_in_ns - ns_late, callback, "whatever")
  */
+class CoreTiming {
+public:
+    CoreTiming();
+    ~CoreTiming();
 
-#include <functional>
-#include <limits>
-#include <string>
-#include "common/common_types.h"
-#include "common/logging/log.h"
+    CoreTiming(const CoreTiming&) = delete;
+    CoreTiming(CoreTiming&&) = delete;
 
-// The below clock rate is based on Switch's clockspeed being widely known as 1.020GHz
-// The exact value used is of course unverified.
-constexpr u64 BASE_CLOCK_RATE = 1019215872; // Switch clock speed is 1020MHz un/docked
-constexpr u64 MAX_VALUE_TO_MULTIPLY = std::numeric_limits<s64>::max() / BASE_CLOCK_RATE;
+    CoreTiming& operator=(const CoreTiming&) = delete;
+    CoreTiming& operator=(CoreTiming&&) = delete;
 
-inline s64 msToCycles(int ms) {
-    // since ms is int there is no way to overflow
-    return BASE_CLOCK_RATE * static_cast<s64>(ms) / 1000;
-}
+    /// CoreTiming begins at the boundary of timing slice -1. An initial call to Advance() is
+    /// required to end slice - 1 and start slice 0 before the first cycle of code is executed.
+    void Initialize(std::function<void()>&& on_thread_init_);
 
-inline s64 msToCycles(float ms) {
-    return static_cast<s64>(BASE_CLOCK_RATE * (0.001f) * ms);
-}
+    /// Clear all pending events. This should ONLY be done on exit.
+    void ClearPendingEvents();
 
-inline s64 msToCycles(double ms) {
-    return static_cast<s64>(BASE_CLOCK_RATE * (0.001) * ms);
-}
-
-inline s64 usToCycles(float us) {
-    return static_cast<s64>(BASE_CLOCK_RATE * (0.000001f) * us);
-}
-
-inline s64 usToCycles(int us) {
-    return (BASE_CLOCK_RATE * static_cast<s64>(us) / 1000000);
-}
-
-inline s64 usToCycles(s64 us) {
-    if (us / 1000000 > MAX_VALUE_TO_MULTIPLY) {
-        LOG_ERROR(Core_Timing, "Integer overflow, use max value");
-        return std::numeric_limits<s64>::max();
+    /// Sets if emulation is multicore or single core, must be set before Initialize
+    void SetMulticore(bool is_multicore_) {
+        is_multicore = is_multicore_;
     }
-    if (us > MAX_VALUE_TO_MULTIPLY) {
-        LOG_DEBUG(Core_Timing, "Time very big, do rounding");
-        return BASE_CLOCK_RATE * (us / 1000000);
+
+    /// Pauses/Unpauses the execution of the timer thread.
+    void Pause(bool is_paused);
+
+    /// Pauses/Unpauses the execution of the timer thread and waits until paused.
+    void SyncPause(bool is_paused);
+
+    /// Checks if core timing is running.
+    bool IsRunning() const;
+
+    /// Checks if the timer thread has started.
+    bool HasStarted() const {
+        return has_started;
     }
-    return (BASE_CLOCK_RATE * us) / 1000000;
-}
 
-inline s64 usToCycles(u64 us) {
-    if (us / 1000000 > MAX_VALUE_TO_MULTIPLY) {
-        LOG_ERROR(Core_Timing, "Integer overflow, use max value");
-        return std::numeric_limits<s64>::max();
+    /// Checks if there are any pending time events.
+    bool HasPendingEvents() const;
+
+    /// Schedules an event in core timing
+    void ScheduleEvent(std::chrono::nanoseconds ns_into_future,
+                       const std::shared_ptr<EventType>& event_type, bool absolute_time = false);
+
+    /// Schedules an event which will automatically re-schedule itself with the given time, until
+    /// unscheduled
+    void ScheduleLoopingEvent(std::chrono::nanoseconds start_time,
+                              std::chrono::nanoseconds resched_time,
+                              const std::shared_ptr<EventType>& event_type,
+                              bool absolute_time = false);
+
+    void UnscheduleEvent(const std::shared_ptr<EventType>& event_type,
+                         UnscheduleEventType type = UnscheduleEventType::Wait);
+
+    void AddTicks(u64 ticks_to_add);
+
+    void ResetTicks();
+
+    void Idle();
+
+    s64 GetDowncount() const {
+        return downcount;
     }
-    if (us > MAX_VALUE_TO_MULTIPLY) {
-        LOG_DEBUG(Core_Timing, "Time very big, do rounding");
-        return BASE_CLOCK_RATE * static_cast<s64>(us / 1000000);
-    }
-    return (BASE_CLOCK_RATE * static_cast<s64>(us)) / 1000000;
-}
 
-inline s64 nsToCycles(float ns) {
-    return static_cast<s64>(BASE_CLOCK_RATE * (0.000000001f) * ns);
-}
+    /// Returns the current CNTPCT tick value.
+    u64 GetClockTicks() const;
 
-inline s64 nsToCycles(int ns) {
-    return BASE_CLOCK_RATE * static_cast<s64>(ns) / 1000000000;
-}
+    /// Returns the current GPU tick value.
+    u64 GetGPUTicks() const;
 
-inline s64 nsToCycles(s64 ns) {
-    if (ns / 1000000000 > MAX_VALUE_TO_MULTIPLY) {
-        LOG_ERROR(Core_Timing, "Integer overflow, use max value");
-        return std::numeric_limits<s64>::max();
-    }
-    if (ns > MAX_VALUE_TO_MULTIPLY) {
-        LOG_DEBUG(Core_Timing, "Time very big, do rounding");
-        return BASE_CLOCK_RATE * (ns / 1000000000);
-    }
-    return (BASE_CLOCK_RATE * ns) / 1000000000;
-}
+    /// Returns current time in microseconds.
+    std::chrono::microseconds GetGlobalTimeUs() const;
 
-inline s64 nsToCycles(u64 ns) {
-    if (ns / 1000000000 > MAX_VALUE_TO_MULTIPLY) {
-        LOG_ERROR(Core_Timing, "Integer overflow, use max value");
-        return std::numeric_limits<s64>::max();
-    }
-    if (ns > MAX_VALUE_TO_MULTIPLY) {
-        LOG_DEBUG(Core_Timing, "Time very big, do rounding");
-        return BASE_CLOCK_RATE * (static_cast<s64>(ns) / 1000000000);
-    }
-    return (BASE_CLOCK_RATE * static_cast<s64>(ns)) / 1000000000;
-}
+    /// Returns current time in nanoseconds.
+    std::chrono::nanoseconds GetGlobalTimeNs() const;
 
-inline u64 cyclesToNs(s64 cycles) {
-    return cycles * 1000000000 / BASE_CLOCK_RATE;
-}
+    /// Checks for events manually and returns time in nanoseconds for next event, threadsafe.
+    std::optional<s64> Advance();
 
-inline s64 cyclesToUs(s64 cycles) {
-    return cycles * 1000000 / BASE_CLOCK_RATE;
-}
+#ifdef _WIN32
+    void SetTimerResolutionNs(std::chrono::nanoseconds ns);
+#endif
 
-inline u64 cyclesToMs(s64 cycles) {
-    return cycles * 1000 / BASE_CLOCK_RATE;
-}
+private:
+    struct Event;
 
-namespace CoreTiming {
+    static void ThreadEntry(CoreTiming& instance);
+    void ThreadLoop();
 
-/**
- * CoreTiming begins at the boundary of timing slice -1. An initial call to Advance() is
- * required to end slice -1 and start slice 0 before the first cycle of code is executed.
- */
-void Init();
-void Shutdown();
+    void Reset();
 
-typedef std::function<void(u64 userdata, int cycles_late)> TimedCallback;
+    std::unique_ptr<Common::WallClock> clock;
 
-/**
- * This should only be called from the emu thread, if you are calling it any other thread, you are
- * doing something evil
- */
-u64 GetTicks();
-u64 GetIdleTicks();
-void AddTicks(u64 ticks);
+    s64 global_timer = 0;
 
-struct EventType;
+#ifdef _WIN32
+    s64 timer_resolution_ns;
+#endif
 
-/**
- * Returns the event_type identifier. if name is not unique, it will assert.
- */
-EventType* RegisterEvent(const std::string& name, TimedCallback callback);
-void UnregisterAllEvents();
+    using heap_t =
+        boost::heap::fibonacci_heap<CoreTiming::Event, boost::heap::compare<std::greater<>>>;
 
-/**
- * After the first Advance, the slice lengths and the downcount will be reduced whenever an event
- * is scheduled earlier than the current values.
- * Scheduling from a callback will not update the downcount until the Advance() completes.
- */
-void ScheduleEvent(s64 cycles_into_future, const EventType* event_type, u64 userdata = 0);
+    heap_t event_queue;
+    u64 event_fifo_id = 0;
 
-/**
- * This is to be called when outside of hle threads, such as the graphics thread, wants to
- * schedule things to be executed on the main thread.
- * Not that this doesn't change slice_length and thus events scheduled by this might be called
- * with a delay of up to MAX_SLICE_LENGTH
- */
-void ScheduleEventThreadsafe(s64 cycles_into_future, const EventType* event_type, u64 userdata);
+    Common::Event event{};
+    Common::Event pause_event{};
+    mutable std::mutex basic_lock;
+    std::mutex advance_lock;
+    std::unique_ptr<std::jthread> timer_thread;
+    std::atomic<bool> paused{};
+    std::atomic<bool> paused_set{};
+    std::atomic<bool> wait_set{};
+    std::atomic<bool> shutting_down{};
+    std::atomic<bool> has_started{};
+    std::function<void()> on_thread_init{};
 
-void UnscheduleEvent(const EventType* event_type, u64 userdata);
+    bool is_multicore{};
+    s64 pause_end_time{};
 
-/// We only permit one event of each type in the queue at a time.
-void RemoveEvent(const EventType* event_type);
-void RemoveNormalAndThreadsafeEvent(const EventType* event_type);
+    /// Cycle timing
+    u64 cpu_ticks{};
+    s64 downcount{};
+};
 
-/** Advance must be called at the beginning of dispatcher loops, not the end. Advance() ends
- * the previous timing slice and begins the next one, you must Advance from the previous
- * slice to the current one before executing any cycles. CoreTiming starts in slice -1 so an
- * Advance() is required to initialize the slice length before the first cycle of emulated
- * instructions is executed.
- */
-void Advance();
-void MoveEvents();
+/// Creates a core timing event with the given name and callback.
+///
+/// @param name     The name of the core timing event to create.
+/// @param callback The callback to execute for the event.
+///
+/// @returns An EventType instance representing the created event.
+///
+std::shared_ptr<EventType> CreateEvent(std::string name, TimedCallback&& callback);
 
-/// Pretend that the main CPU has executed enough cycles to reach the next event.
-void Idle();
-
-/// Clear all pending events. This should ONLY be done on exit.
-void ClearPendingEvents();
-
-void ForceExceptionCheck(s64 cycles);
-
-u64 GetGlobalTimeUs();
-
-int GetDowncount();
-
-} // namespace CoreTiming
+} // namespace Core::Timing

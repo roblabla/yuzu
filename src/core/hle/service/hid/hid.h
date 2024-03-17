@@ -1,20 +1,14 @@
-// Copyright 2015 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
-namespace Service {
-namespace HID {
+namespace Core {
+class System;
+}
 
-/// Initialize HID service
-void Init();
+namespace Service::HID {
 
-/// Shutdown HID service
-void Shutdown();
+void LoopProcess(Core::System& system);
 
-/// Reload input devices. Used when input configuration changed
-void ReloadInputDevices();
-
-} // namespace HID
-} // namespace Service
+} // namespace Service::HID

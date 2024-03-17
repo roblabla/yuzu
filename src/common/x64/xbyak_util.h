@@ -1,15 +1,13 @@
-// Copyright 2016 Citra Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// SPDX-FileCopyrightText: 2016 Citra Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
 #include <type_traits>
-#include <xbyak.h>
+#include <xbyak/xbyak.h>
 #include "common/x64/xbyak_abi.h"
 
-namespace Common {
-namespace X64 {
+namespace Common::X64 {
 
 // Constants for use with cmpps/cmpss
 enum {
@@ -23,8 +21,8 @@ enum {
     CMP_ORD = 7,
 };
 
-inline bool IsWithin2G(uintptr_t ref, uintptr_t target) {
-    u64 distance = target - (ref + 5);
+constexpr bool IsWithin2G(uintptr_t ref, uintptr_t target) {
+    const u64 distance = target - (ref + 5);
     return !(distance >= 0x8000'0000ULL && distance <= ~0x8000'0000ULL);
 }
 
@@ -34,7 +32,7 @@ inline bool IsWithin2G(const Xbyak::CodeGenerator& code, uintptr_t target) {
 
 template <typename T>
 inline void CallFarFunction(Xbyak::CodeGenerator& code, const T f) {
-    static_assert(std::is_pointer<T>(), "Argument must be a (function) pointer.");
+    static_assert(std::is_pointer_v<T>, "Argument must be a (function) pointer.");
     size_t addr = reinterpret_cast<size_t>(f);
     if (IsWithin2G(code, addr)) {
         code.call(f);
@@ -45,5 +43,4 @@ inline void CallFarFunction(Xbyak::CodeGenerator& code, const T f) {
     }
 }
 
-} // namespace X64
-} // namespace Common
+} // namespace Common::X64
